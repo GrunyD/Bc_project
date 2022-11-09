@@ -2,6 +2,7 @@ import argparse
 import logging
 import sys
 from pathlib import Path
+import gc
 
 import torch
 import torch.nn as nn
@@ -13,16 +14,18 @@ from tqdm import tqdm
 
 from utils.data_loading import BasicDataset, CarvanaDataset
 from utils.dice_score import dice_loss
-from evaluate import evaluate
+# from bc_project.Bc_project.train_predict_eval.evaluate import evaluate
+from evaluate import evaluate, evaluate_model
 from unet.Unet_model import UNet
 
 # dir_img = Path('./data/kuntluka/zuby/dental_restorations/images_without_alpha/')
 # dir_mask = Path('./data/masks_01/')
-dir_img = Path('~/bc_project/data/images_without_alpha/')
-dir_mask = Path('~bc_project/data/masks/')
+dir_img = Path('/mnt/home.stud/grundda2/bc_project/data/images/')
+dir_mask = Path('/mnt/home.stud/grundda2/bc_project/data/masks/')
+dir_test_img = Path('/mnt/home.stud/grundda2/bc_project/data/testing_images/')
 
 dir_checkpoint = Path('./checkpoints/')
-model_name = "MODEL_without_alpha.pth"
+model_name = "MODEL_scale_1_bilinear_amp.pth"
 
 def train_net(net,
               device,
@@ -55,7 +58,8 @@ def train_net(net,
     experiment = wandb.init(project='bc_project', entity="gruny")
     experiment.config.update(dict(epochs=epochs, batch_size=batch_size, learning_rate=learning_rate,
                                   val_percent=val_percent, save_checkpoint=save_checkpoint, img_scale=img_scale,
-                                  amp=amp))
+                                  amp=amp, bilinear=net.bilinear))
+    
 
     logging.info(f'''Starting training:
         Epochs:          {epochs}
@@ -67,6 +71,7 @@ def train_net(net,
         Device:          {device.type}
         Images scaling:  {img_scale}
         Mixed Precision: {amp}
+        Bilinear: {net.bilinear}
     ''')
 
     # 4. Set up the optimizer, the loss, the learning rate scheduler and the loss scaling for AMP
@@ -150,6 +155,9 @@ def train_net(net,
             Path(dir_checkpoint).mkdir(parents=True, exist_ok=True)
             torch.save(net.state_dict(), str(dir_checkpoint / 'checkpoint_epoch{}.pth'.format(epoch)))
             logging.info(f'Checkpoint {epoch} saved!')
+    
+    test_dice_score = evaluate_model(dir_test_img, dir_mask, net, img_scale, device, 0.5)
+    experiment.summary["Testing_images_dice_score"] = test_dice_score
 
 
 def get_args():
@@ -173,6 +181,8 @@ if __name__ == '__main__':
 
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    # device = torch.device('cpu')
+
     logging.info(f'Using device {device}')
 
 
@@ -200,6 +210,7 @@ if __name__ == '__main__':
 
     net.to(device=device)
     try:
+
         train_net(net=net,
                   epochs=args.epochs,
                   batch_size=args.batch_size,
@@ -209,6 +220,8 @@ if __name__ == '__main__':
                   val_percent=args.val / 100,
                   amp=args.amp)
         torch.save(net.state_dict(), model_name)
+        torch.cuda.empty_cache()
+
     except KeyboardInterrupt:
         torch.save(net.state_dict(), 'INTERRUPTED.pth')
         logging.info('Saved interrupt')
