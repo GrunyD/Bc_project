@@ -1,6 +1,14 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import cv2
+import numpy as np
+
+#########################################################################
+#                                                                       #
+#                           Unet parts                                  #
+#                                                                       #
+#########################################################################
 
 
 class DoubleConv(nn.Module):
@@ -75,7 +83,163 @@ class OutConv(nn.Module):
         return self.conv(x)
 
 
+class Norm(nn.Module):
+    def __init__(self, mean, std):
+        super().__init__()
+        self.mean = mean
+        self.std = std
+
+    def forward(self, x):
+        return (x-self.mean)/self.std
+
+class Morphological_layer(nn.Module):
+    def __init__(self, kernel_size:int|tuple ):
+        super().__init__()
+        if isinstance(kernel_size, (list, tuple)):
+            self.erode_kernel = np.ones((kernel_size[0], kernel_size[0]))
+            self.dilate_kernel = np.ones((kernel_size[1], kernel_size[1]))
+        else:
+            self.erode_kernel = np.ones((int(kernel_size), int(kernel_size)))
+            self.dilate_kernel = self.erode_kernel
+
+class Opening(Morphological_layer):
+    def __init__(self, kernel_size:int|tuple):
+        super().__init__(kernel_size)
+
+    def forward(self, x):
+        erosion =  cv2.erode(x, self.erode_kernel, iterations = 1)
+        dilatation = cv2.dilate(erosion, self.dilate_kernel, iterations = 1)
+        return dilatation
+
+class Closing(Morphological_layer):
+    def __init__(self, kernel_size:int|tuple):
+        super().__init__(kernel_size)
+
+    def forward(self, x):
+        dilatation = cv2.dilate(x, self.dilate_kernel, iterations = 1)
+        erosion =  cv2.erode(dilatation, self.erode_kernel, iterations = 1)
+        return erosion
+
+class Opening_and_Closing(nn.Module):
+    def __init__(self, opening_kernel_size, closing_kernel_size) -> None:
+        super().__init__()
+        self.opening = Opening(opening_kernel_size)
+        self.closing = Closing(closing_kernel_size)
+    
+    def forward(self, x):
+        return torch.from_numpy(self.closing(self.opening(x)))
+
+
+
+
+#########################################################################
+#                                                                       #
+#                           Unet models                                 #
+#                                                                       #
+#########################################################################
+
+##  0.4506735083369092 - mean
+##  0.057212669622861305 - std**2
+
+class UNet0(nn.Module):
+    def __init__(self, n_channels, n_classes, mean, std):
+        super().__init__()
+        self.n_channels = n_channels
+        self.n_classes = n_classes
+
+        self.norm = Norm(mean, std)
+        self.inc = DoubleConv(n_channels, 64)
+        self.down1 = Down(64, 128)
+        self.down2 = Down(128, 256)
+        self.down3 = Down(256, 512)
+        self.down4 = Down(512, 512)
+        self.up4 = Up(1024, 256)
+        self.up3 = Up(512, 128)
+        self.up2 = Up(256, 64)
+        self.up1 = Up(128, 64)
+        self.outc = OutConv(64, n_classes)
+
+    def forward(self, x):
+        x = self.norm(x)
+        x1 = self.inc(x)
+        x2 = self.down1(x1)
+        x3 = self.down2(x2)
+        x4 = self.down3(x3)
+        x5 = self.down4(x4)
+        x = self.up4(x5, x4)
+        x = self.up3(x, x3)
+        x = self.up2(x, x2)
+        x = self.up1(x, x1)
+        logits = self.outc(x)
+        return logits
+
+
+
+class UNet1(UNet0):
+    """
+    One more Maxpooling layer -> 1 level deeper
+    """
+    def __init__(self, n_channels, n_classes, mean, std):
+        super().__init__(n_channels, n_classes, mean, std)
+        self.down4 = Down(512, 1024)
+        self.down5 = Down(1024, 1024)
+        self.up5 = Up(2048, 512)
+
+    def forward(self, x):
+        x = self.norm(x)
+        x1 = self.inc(x)
+        x2 = self.down1(x1)
+        x3 = self.down2(x2)
+        x4 = self.down3(x3)
+        x5 = self.down4(x4)
+        x6 = self.down5(x5)
+        x = self.up5(x6, x5)
+        x = self.up4(x, x4)
+        x = self.up3(x, x3)
+        x = self.up2(x, x2)
+        x = self.up1(x, x1)
+        logits = self.outc(x)
+        return logits
+
+"""
+TODO: Unet2 and Unet3 - přidat vždy ještě jednu vrstvu
+"""
+    
+
+
+
+
+
+
+
+#########################################################################
+#                                                                       #
+#                           Original model                              #
+#                                                                       #
+#########################################################################
 class UNet(nn.Module):
+    ### NORMAL
+    # def __init__(self, n_channels, n_classes, bilinear=False):
+    #     super(UNet, self).__init__()
+    #     self.n_channels = n_channels
+    #     self.n_classes = n_classes
+    #     self.bilinear = bilinear
+
+    #     self.inc = DoubleConv(n_channels, 64)
+    #     self.down1 = Down(64, 128)
+    #     self.down2 = Down(128, 256)
+    #     self.down3 = Down(256, 512)
+    #     factor = 2 if bilinear else 1
+    #     self.down4 = Down(512, 1024 // factor)
+    #     self.up1 = Up(1024, 512 // factor, bilinear)
+    #     self.up2 = Up(512, 256 // factor, bilinear)
+    #     self.up3 = Up(256, 128 // factor, bilinear)
+    #     self.up4 = Up(128, 64, bilinear)
+    #     self.outc = OutConv(64, n_classes)
+
+    ###
+    ### DEEPER MODEL
+    ###
     def __init__(self, n_channels, n_classes, bilinear=False):
         super(UNet, self).__init__()
         self.n_channels = n_channels
@@ -86,21 +250,42 @@ class UNet(nn.Module):
         self.down1 = Down(64, 128)
         self.down2 = Down(128, 256)
         self.down3 = Down(256, 512)
+        self.down4 = Down(512, 1024)
         factor = 2 if bilinear else 1
-        self.down4 = Down(512, 1024 // factor)
+        self.down5 = Down(1024, 2048// factor)
+        self.up0 = Up(2048, 1024 // factor, bilinear)
         self.up1 = Up(1024, 512 // factor, bilinear)
         self.up2 = Up(512, 256 // factor, bilinear)
         self.up3 = Up(256, 128 // factor, bilinear)
         self.up4 = Up(128, 64, bilinear)
         self.outc = OutConv(64, n_classes)
 
+    #
+    #ORIGINAL
+    #
+    # def forward(self, x):
+    #     x1 = self.inc(x)
+    #     x2 = self.down1(x1)
+    #     x3 = self.down2(x2)
+    #     x4 = self.down3(x3)
+    #     x5 = self.down4(x4)
+    #     x = self.up1(x5, x4)
+    #     x = self.up2(x, x3)
+    #     x = self.up3(x, x2)
+    #     x = self.up4(x, x1)
+    #     logits = self.outc(x)
+    #     return logits
+
+    ### DEEPER
     def forward(self, x):
         x1 = self.inc(x)
         x2 = self.down1(x1)
         x3 = self.down2(x2)
         x4 = self.down3(x3)
         x5 = self.down4(x4)
-        x = self.up1(x5, x4)
+        x6 = self.down5(x5)
+        x = self.up0(x6, x5)
+        x = self.up1(x, x4)
         x = self.up2(x, x3)
         x = self.up3(x, x2)
         x = self.up4(x, x1)

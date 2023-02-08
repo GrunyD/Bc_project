@@ -77,7 +77,7 @@ def get_predicted_mask(filename, net, scale_factor, out_threshold, device):
 
 def evaluate_model(path_to_test_images, path_to_true_masks, net, scale_factor,device, out_threshold):
     net.eval()
-    # my_dice_score = 0
+
     dice = 0
     for image in os.listdir(path_to_test_images):
         pred_mask = get_predicted_mask(os.path.join(path_to_test_images,image), net, scale_factor, out_threshold, device)
@@ -85,12 +85,6 @@ def evaluate_model(path_to_test_images, path_to_true_masks, net, scale_factor,de
         
         im_frame = Image.open(os.path.join(path_to_true_masks, F"{image[:-4]}.gif"))
         true_mask = np.array(im_frame.getdata()).reshape((pred_mask.shape))
-
-        # intersection = np.sum(true_mask + pred_mask == 2)
-        # union = np.sum(true_mask) + np.sum(pred_mask)
-        # my_dice_score += 2*intersection/union
-
         dice += dice_coeff(torch.from_numpy(pred_mask), torch.from_numpy(true_mask), reduce_batch_first=False)
 
-    # print(my_dice_score/len(os.listdir(path_to_test_images)))
     return dice/len(os.listdir(path_to_test_images))
