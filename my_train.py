@@ -8,14 +8,14 @@ from tqdm import tqdm
 from utils.augmentation_dataset import AugmentedDataset
 from utils.dice_score import dice_loss
 from evaluate import evaluate
-from unet.Unet_model import UNet1, UNet0
+from unet.Unet_model import UNet1, UNet0, UNet2, UNetPP
 
 
-VERSION = "6.8"
+# VERSION = "6.8"
 dir_images = Path('/mnt/home.stud/grundda2/bc_project/data/images1channel/')
 dir_masks = Path('/mnt/home.stud/grundda2/bc_project/data/masks/')
 dir_val_images = Path('/mnt/home.stud/grundda2/bc_project/data/val_images1channel/')
-model_name = F"MODEL_6.8_.pth"
+# model_name = F"MODEL_6.8_.pth"
 
 EPOCHS = 40
 BATCH_SIZE = 2
@@ -66,19 +66,22 @@ def train(net, learning_rate):
     experiment = wandb.init(project='bc_project', entity="gruny", reinit = True)#Reinit = True is for multiple runs in one script
     experiment.config.update(dict(epochs=EPOCHS, 
                                     batch_size=BATCH_SIZE, 
-                                    learning_rate_init=learning_rate,
-                                    architecture = net, 
+                                    # learning_rate_init=learning_rate,
+                                    architecture = str(net), 
                                     optimizer=optimizer,
-                                    scheduler = scheduler,
-                                    criterion = criterion,
+                                    # scheduler = scheduler,
+                                    # criterion = criterion,
                                     weight_decay = WEIGHT_DECAY,
                                     momentum = MOMENTUM,
                                     #patience = PATIENCE,
-                                    version = VERSION
+                                    # version = VERSION
                                     #volume = val_percent
                                     ))
+    experiment.define_metric("DSC", summary ="max")
     #######################################
     #Training loop
+    best_dict = dict()
+    best_dice = 0.0
     for epoch in range(1, EPOCHS+1):
         net.train()
         epoch_loss = 0
@@ -109,8 +112,8 @@ def train(net, learning_rate):
             # Visible bar and wandb
 
             #pbar.update(images.shape[0])
-            global_step += 1
-            epoch_loss += loss.item()
+            # global_step += 1
+            # epoch_loss += loss.item()
             #experiment.log({
             #        'train loss': loss.item(),
              #       'epoch': epoch
@@ -131,22 +134,29 @@ def train(net, learning_rate):
                    # print(val_score_init)
                     experiment.log({
                             'learning rate': optimizer.param_groups[0]['lr'],
-                            'validation_Dice': val_score,
+                            'DSC': val_score,
                             #'training_Dice': training_score,
                             'epoch': epoch,
                          })
+                    if val_score > best_dice:
+                        best_dict = net.state_dict().copy()
+                        best_dice = val_score
         scheduler.step()
-       # val_score_tensor = torch.tensor(val_score_list)
-        #scheduler.step(torch.mean(val_score_tensor))
 
-    experiment.finish()       
+
+    this_run = dict(net = best_dict, name = experiment.name, score = best_dice)
+    experiment.finish()   
+    return this_run    
 
 if __name__ == '__main__': 
     DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    net = UNet1(n_channels=N_CHANNELS, n_classes=N_CLASSES,mean = 0.4506735083369092, std = 0.23919170057270236)
+    net = UNetPP(n_channels=N_CHANNELS, n_classes=N_CLASSES,mean = 0.4506735083369092, std = 0.23919170057270236)
     net.to(device= DEVICE)
 
-    train(net=net, learning_rate = 1e-5)
-    torch.save(net.state_dict(), model_name)
+    run = train(net=net, learning_rate = 1e-5)
+    try:
+        torch.save(run["net"], F"/datagrid/personal/grundda/models/{run["name"]}_{run["score"]}")
+    except Exception as err:
+        print(err)
     torch.cuda.empty_cache()
 
