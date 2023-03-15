@@ -5,12 +5,85 @@ from os import path, listdir
 from PIL import Image
 from pathlib import Path
 
-
+"""
+To change parameters of specific transforms, go to func AUGMENTATION PIPELINE
+"""
 ###########################################################################
 #                                                                         #
 #                Transformation classes for augmentation                  #
 #                                                                         #
 ###########################################################################
+"""
+Toechvisions Random apply is not satisfactory for the purpose of these classes. 
+We have to handle augmenting segmentation mask in a proper way. Thus the basic class to inherit
+from is MyRandomTransform. It defines __call__ which checks for probability and decides if 
+forward function of specific transofrm should be applied. All specific transforms define only 
+__init__ and forward method
+"""
+
+class MyRandomTransform(torch.nn.Module):
+    """
+    Creates a class to inherit from
+    Children classes then defines only forward method which is called from __call__ method
+    with given probability p
+    """
+    def __init__(self, p:float):
+        super().__init__()
+        assert isinstance(p, (float, int))
+        assert p >= 0
+        if p > 1:
+            assert p / 100 <= 1
+            self.p = p/100
+        else:
+            self.p = p
+
+    def forward(self, tensor):
+        raise NotImplementedError
+
+    def __call__(self, tensor):
+        if torch.rand(1) <= self.p:
+            return self.forward(tensor)
+        else:
+            return tensor
+###########################################################################
+
+class MyRandomElastic(MyRandomTransform):
+    def __init__(self, p:float, alpha:tuple):
+        super().__init__(p)
+        try:
+            assert alpha[1] - alpha[0] >= 0
+            assert alpha[0] >= 0
+            self.alpha = tuple(map(float,alpha))
+        except (IndexError, TypeError):
+            assert isinstance(alpha, (float, int))
+            self.alpha = (float(alpha), float(alpha))
+
+    def forward(self, tensor):
+        alpha = self.alpha[0] + torch.rand(1)*(self.alpha[1] - self.alpha[0])
+        tensor = transforms.ElasticTransform(float(alpha))(tensor)
+        tensor[-1,:,:] = tensor[-1,:,:] > 0
+        return tensor
+
+class MyRandomGaussianNoise(MyRandomTransform):
+    """
+    Adds gaussian noise to a picture (mu is mean and sigma standard deviation), nothing to the mask. 
+    """
+    def __init__(self, p, sigma:float, mu = 0):
+        super().__init__(p)
+
+        assert isinstance(sigma, (int, float))
+        self.sigma = abs(sigma)
+        assert isinstance(mu, (int, float))
+        self.mu = mu
+
+    def forward(self, tensor):
+        noise = torch.normal(self.mu, self.sigma, (1, 847, 1068))
+        if tensor.size()[0] >1:
+            tensor[:-1, :, :] += noise #leaves the mask out
+        else:
+            new_tensor = tensor + noise
+        return new_tensor
+        
 
 class MyRandomAffine(torch.nn.Module):
     """
@@ -34,55 +107,67 @@ class MyRandomAffine(torch.nn.Module):
     def __call__(self, tensor):
         return self.forward(tensor)
 
-class MyRandomGammaCorrection(torch.nn.Module):
+class MyRandomGammaCorrection(MyRandomTransform):
     """
     Applies Gamma correction with probability p
     Gamma is chosen randomly from given range
     """
     def __init__(self, gamma_range: tuple, p:float):
-        super().__init__()
-        assert gamma_range[1] > gamma_range[0]
+        super().__init__(p)
+        assert gamma_range[1] >= gamma_range[0]
         assert gamma_range[0] > 0
         self.low_gamma = gamma_range[0]
         self.high_gamma = gamma_range[1]
-        assert isinstance(p, (int, float))
-        self.p = p
 
     def forward(self, tensor):
-        if torch.rand(1) <= self.p:
-            gamma = self.low_gamma + torch.rand(1)*(self.high_gamma - self.low_gamma)
-            tensor = tensor ** gamma
-
+        gamma = self.low_gamma + torch.rand(1)*(self.high_gamma - self.low_gamma)
+        tensor = tensor ** gamma
         return tensor
 
-    def __call__(self, tensor):
-        return self.forward(tensor)
-
-class MyRandomGaussianBlur(torch.nn.Module):
+class MyRandomGaussianBlur(MyRandomTransform):
     """
     Applies Gaussian blur with probability p
     Chooses kernel at random from given range
     """
-    def __init__(self, kernel_range: tuple, p:float, sigma: tuple = (1.0, 2.0)):
-        super().__init__()
+    def __init__(self, p:float, kernel_range: tuple, sigma: tuple = (1.0, 2.0)):
+        super().__init__(p)
         assert kernel_range[0] < kernel_range[1]
         self.low_kernel = kernel_range[0]
         self.high_kernel = kernel_range[1]
         
         self.sigma = sigma
 
-        assert isinstance(p, (float, int))
-        self.p = p
 
     def forward(self, tensor):
-        if torch.rand(1) <= self.p:
-            kernel = torch.randint(self.low_kernel, self.high_kernel, (1,))[0]
-            kernel = kernel + 1 if kernel % 2 == 0 else kernel
+        kernel = torch.randint(self.low_kernel, self.high_kernel, (1,))[0]
+        kernel = kernel + 1 if kernel % 2 == 0 else kernel
+        if len(tensor.size()) > 2 and tensor.size()[0] >1 :
             tensor[:-1,:,:] = transforms.GaussianBlur((kernel, kernel), self.sigma)(tensor[:-1,:,:])
+        else:
+            tensor = transforms.GaussianBlur((kernel, kernel), self.sigma)(tensor)
         return tensor
-
-    def __call__(self, tensor):
-        return self.forward(tensor)
+    
+class MyRandomCrop(MyRandomTransform):
+    """
+    Crops the original image with random size and at random location and then rezise it 
+    to original shape. All with probability p.
+    """
+    def __init__(self, p:float, scale:tuple):
+        super().__init__(p)
+        try:
+            assert scale[1]-scale[0] >= 0
+            assert scale[0] >= 0
+            assert scale[1] <= 1
+            self.scale = scale
+        except TypeError:
+            assert isinstance(scale, float)
+            assert scale >= 0 and scale <= 1
+            self.scale = (scale, 1.0)
+    
+    def forward(self, tensor):
+        tensor = transforms.RandomResizedCrop((847, 1068),scale = self.scale)(tensor)
+        tensor[-1,:,:] = tensor[-1,:,:] > 0 #Makes mask binary again if the bilinear interpolation breaks it
+        return tensor
 
 
 ###########################################################################
@@ -112,11 +197,11 @@ class AugmentedDataset(torch.utils.data.Dataset):
         if self.training_set:
             tensor = torch.vstack((img, mask))
             pipeline = transforms.Compose([
-                transforms.RandomVerticalFlip(),
-                transforms.RandomHorizontalFlip(),
-                MyRandomGammaCorrection((0.6, 1.4), 0.3),
-                MyRandomGaussianBlur((7,31), 0.3),
-                MyRandomAffine(translation_p=0.5, rotation_p=0.3, translation_range=(0.1, 0.1), max_rotation=10)
+                #transforms.RandomVerticalFlip(),
+                #transforms.RandomHorizontalFlip(),
+                #MyRandomGammaCorrection((0.6, 1.4), 0.3),
+                #MyRandomGaussianBlur((7,31), 0.3),
+                MyRandomAffine(translation_p=0, rotation_p=0.4, translation_range=(0.2, 0.2), max_rotation=20)
             ])
             augmented_tensor = pipeline(tensor)
             return augmented_tensor[:-1,:,:], augmented_tensor[-1,:,:]
