@@ -60,7 +60,8 @@ class MyRandomElastic(MyRandomTransform):
 
     def forward(self, tensor):
         alpha = self.alpha[0] + torch.rand(1)*(self.alpha[1] - self.alpha[0])
-        tensor = transforms.ElasticTransform(float(alpha))(tensor)
+        transform = transforms.ElasticTransform(float(alpha))
+        tensor = transform(tensor)
         tensor[-1,:,:] = tensor[-1,:,:] > 0
         return tensor
 
@@ -71,18 +72,24 @@ class MyRandomGaussianNoise(MyRandomTransform):
     def __init__(self, p, sigma:float, mu = 0):
         super().__init__(p)
 
-        assert isinstance(sigma, (int, float))
-        self.sigma = abs(sigma)
+        if isinstance(sigma, (int, float)):
+            self.sigma = (abs(sigma), abs(sigma))
+        elif isinstance(sigma, (list, tuple)):
+            assert sigma[0] <= sigma[1] and sigma[0] >= 0
+            self.sigma = sigma
         assert isinstance(mu, (int, float))
-        self.mu = mu
+        self.mu = float(mu)
 
     def forward(self, tensor):
-        noise = torch.normal(self.mu, self.sigma, (1, 847, 1068))
+        sigma = self.sigma[0] + (self.sigma[1]-self.sigma[0])*torch.rand(1)
+        noise = torch.normal(self.mu,float(sigma), (1, 847, 1068))
         if tensor.size()[0] >1:
             tensor[:-1, :, :] += noise #leaves the mask out
+            return tensor
         else:
             new_tensor = tensor + noise
-        return new_tensor
+            return new_tensor
+
         
 
 class MyRandomAffine(torch.nn.Module):
@@ -197,11 +204,14 @@ class AugmentedDataset(torch.utils.data.Dataset):
         if self.training_set:
             tensor = torch.vstack((img, mask))
             pipeline = transforms.Compose([
+                #MyRandomElastic(p = 0.2, alpha = (50,150))
                 #transforms.RandomVerticalFlip(),
                 #transforms.RandomHorizontalFlip(),
-                #MyRandomGammaCorrection((0.6, 1.4), 0.3),
-                #MyRandomGaussianBlur((7,31), 0.3),
-                MyRandomAffine(translation_p=0, rotation_p=0.4, translation_range=(0.2, 0.2), max_rotation=20)
+               # MyRandomGammaCorrection((0.6, 1.4), 0.3),
+               # MyRandomGaussianBlur(0.3,(7,31)),
+                MyRandomAffine(translation_p=0.4, rotation_p=0, translation_range=(0.2, 0.2), max_rotation=20)
+                #MyRandomCrop(p = 0.3, scale = 0.5),
+                #MyRandomGaussianNoise(p = 0.3, sigma = (0.01, 0.1))
             ])
             augmented_tensor = pipeline(tensor)
             return augmented_tensor[:-1,:,:], augmented_tensor[-1,:,:]

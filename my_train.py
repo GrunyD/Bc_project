@@ -3,6 +3,7 @@ from pathlib import Path
 import torch
 import wandb
 from tqdm import tqdm
+from os import path
 
 #My libraries
 from utils.augmentation_dataset import AugmentedDataset
@@ -12,15 +13,17 @@ from unet.Unet_model import UNet1, UNet0, UNet2, UNetPP
 
 
 # VERSION = "6.8"
-dir_images = Path('/mnt/home.stud/grundda2/bc_project/data/images1channel/')
-dir_masks = Path('/mnt/home.stud/grundda2/bc_project/data/masks/')
-dir_val_images = Path('/mnt/home.stud/grundda2/bc_project/data/val_images1channel/')
+path_to_data = Path('/datagrid/personal/grundda')
+dir_images = path.join(path_to_data,Path('data/images1channel/'))
+dir_masks = path.join(path_to_data, Path('data/masks/'))
+dir_val_images = path.join(path_to_data,Path('data/val_images1channel/'))
 # model_name = F"MODEL_6.8_.pth"
 
-EPOCHS = 40
+EPOCHS = 70
 BATCH_SIZE = 2
 N_CHANNELS = 1
 N_CLASSES = 2
+
 
 # OPTIMIZER ARGS
 LEARNIG_RATE = 1e-5
@@ -73,6 +76,7 @@ def train(net, learning_rate):
                                     # criterion = criterion,
                                     weight_decay = WEIGHT_DECAY,
                                     momentum = MOMENTUM,
+                                    augment = "Translation",
                                     #patience = PATIENCE,
                                     # version = VERSION
                                     #volume = val_percent
@@ -82,81 +86,93 @@ def train(net, learning_rate):
     #Training loop
     best_dict = dict()
     best_dice = 0.0
+    last_improvement = 0
     for epoch in range(1, EPOCHS+1):
         net.train()
         epoch_loss = 0
         #val_score_list = []
-        #with tqdm(total=n_train, desc=f'Epoch {epoch}/{EPOCHS}', unit='img') as pbar:
-        for batch in train_loader:
-            images = batch['image']
-            true_masks = batch['mask']
+        with tqdm(total=n_train, desc=f'Epoch {epoch}/{EPOCHS}', unit='img') as pbar:
+            for batch in train_loader:
+                images = batch['image']
+                true_masks = batch['mask']
 
-            assert images.shape[1] == net.n_channels, \
-                    f'Network has been defined with {net.n_channels} input channels, ' \
-                    f'but loaded images have {images.shape[1]} channels. Please check that ' \
-                    'the images are loaded correctly.'
-            images = images.to(device=DEVICE, dtype=torch.float32)
-            true_masks = true_masks.to(device=DEVICE, dtype=torch.long)
+                assert images.shape[1] == net.n_channels, \
+                        f'Network has been defined with {net.n_channels} input channels, ' \
+                        f'but loaded images have {images.shape[1]} channels. Please check that ' \
+                        'the images are loaded correctly.'
+                images = images.to(device=DEVICE, dtype=torch.float32)
+                true_masks = true_masks.to(device=DEVICE, dtype=torch.long)
 
-            with torch.cuda.amp.autocast(enabled=True):
-                masks_pred = net(images)
-                loss = criterion(masks_pred, true_masks) + 3* dice_loss(torch.argmax(masks_pred, dim = 1).float(), true_masks.float())
+                with torch.cuda.amp.autocast(enabled=True):
+                    masks_pred = net(images)
+                    loss = criterion(masks_pred, true_masks) + 3* dice_loss(torch.argmax(masks_pred, dim = 1).float(), true_masks.float())
 
-            optimizer.zero_grad(set_to_none=True)
-            grad_scaler.scale(loss).backward()
-            grad_scaler.step(optimizer)
-            grad_scaler.update()
+                optimizer.zero_grad(set_to_none=True)
+                grad_scaler.scale(loss).backward()
+                grad_scaler.step(optimizer)
+                grad_scaler.update()
 
 
-            #############################
-            # Visible bar and wandb
+                #############################
+                # Visible bar and wandb
 
-            #pbar.update(images.shape[0])
-            # global_step += 1
-            # epoch_loss += loss.item()
-            #experiment.log({
-            #        'train loss': loss.item(),
-             #       'epoch': epoch
-              #  })
-            #    pbar.set_postfix(**{'loss (batch)': loss.item()})
+                pbar.update(images.shape[0])
+                global_step += 1
+                # epoch_loss += loss.item()
+                #experiment.log({
+                #        'train loss': loss.item(),
+                #       'epoch': epoch
+                #  })
+                pbar.set_postfix(**{'loss (batch)': loss.item()})
 
-                
-            #############################
-            # Evaluation round
-            division_step = (n_train // (10 * BATCH_SIZE))
-            if division_step > 0:
-                if global_step % division_step == 0:
-                    val_score = evaluate(net, val_loader, DEVICE)
-                    #train_dataset.training_set = False #Turns off the augmentation
-                    #training_score = evaluate(net, train_loader, DEVICE)
-                    #train_dataset.training_set = True #Turns the augmentation back on
-                    #val_score_list.append(val_score)
-                   # print(val_score_init)
-                    experiment.log({
-                            'learning rate': optimizer.param_groups[0]['lr'],
-                            'DSC': val_score,
-                            #'training_Dice': training_score,
-                            'epoch': epoch,
-                         })
-                    if val_score > best_dice:
-                        best_dict = net.state_dict().copy()
-                        best_dice = val_score
-        scheduler.step()
+                    
+                #############################
+                # Evaluation round
+                division_step = (n_train // (10 * BATCH_SIZE))
+                if division_step > 0:
+                    if global_step % division_step == 0:
+                        val_score = evaluate(net, val_loader, DEVICE)
+                        #train_dataset.training_set = False #Turns off the augmentation
+                        #training_score = evaluate(net, train_loader, DEVICE)
+                        #train_dataset.training_set = True #Turns the augmentation back on
+                        #val_score_list.append(val_score)
+                    # print(val_score_init)
+                        experiment.log({
+                                'learning rate': optimizer.param_groups[0]['lr'],
+                                'DSC': val_score,
+                                #'training_Dice': training_score,
+                                'epoch': epoch,
+                            })
+                        if val_score > best_dice:
+                            best_dict = net.state_dict().copy()
+                            best_dice = val_score
+                            last_improvement = epoch
+                        #else:
+                           # if epoch-last_improvement >= 25 and epoch >= 40:
+                            #    this_run = dict(net = best_dict, name = experiment.name, score = best_dice)
+                             #   experiment.finish()
+                              #  print(best_dice)
+                               # return this_run
+            scheduler.step()
 
 
     this_run = dict(net = best_dict, name = experiment.name, score = best_dice)
     experiment.finish()   
+    print(best_dice)
     return this_run    
 
 if __name__ == '__main__': 
-    DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    net = UNetPP(n_channels=N_CHANNELS, n_classes=N_CLASSES,mean = 0.4506735083369092, std = 0.23919170057270236)
-    net.to(device= DEVICE)
-
-    run = train(net=net, learning_rate = 1e-5)
-    try:
-        torch.save(run["net"], F"/datagrid/personal/grundda/models/{run["name"]}_{run["score"]}")
-    except Exception as err:
-        print(err)
-    torch.cuda.empty_cache()
+    for i in range(3):
+        DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        net = UNet1(n_channels=N_CHANNELS, n_classes=N_CLASSES,mean = 0.4506735083369092, std = 0.23919170057270236)#, depth= 8, base_kernel_num = 32)
+        net.to(device= DEVICE)
+        try:
+            run = train(net=net, learning_rate = 1e-5)
+        except Exception as err:
+            print(err)
+        try:
+            torch.save(run["net"], F"/datagrid/personal/grundda/models/{run['name']}_{run['score']:3f}.pth")
+        except Exception as err:
+            print(err)
+        torch.cuda.empty_cache()
 

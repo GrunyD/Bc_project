@@ -52,6 +52,9 @@ class Up(nn.Module):
         super().__init__()
         self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)
         self.conv = DoubleConv(in_channels, out_channels)
+    
+        #self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        #self.conv = DoubleConv(in_channels, out_channels, in_channels // 2)
 
     def forward(self, x1: torch.Tensor, x2: torch.Tensor):
         x1 = self.up(x1)
@@ -82,8 +85,11 @@ class OutConv(nn.Module):
 class UpPP(nn.Module): #For UNet++
     def __init__(self, in_channels, out_channels):
         super().__init__()
-        self.up = nn.ConvTranspose2d(out_channels//2, out_channels, kernel_size=2, stride=2)
+        self.up = nn.ConvTranspose2d(out_channels*2, out_channels, kernel_size=2, stride=2)
         self.conv = DoubleConv(in_channels, out_channels)
+        
+        #self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        #self.conv = DoubleConv(in_channels, out_channels, in_channels // 2)
 
     def forward(self, x_lower:torch.Tensor, x_list: list):
         x_lower = self.up(x_lower)
@@ -92,7 +98,7 @@ class UpPP(nn.Module): #For UNet++
 
         x_lower = F.pad(x_lower, [diffX // 2, diffX - diffX // 2,
                         diffY // 2, diffY - diffY // 2])
-        x = torch.cat([x_lower, *x_list])
+        x = torch.cat([x_lower, *x_list], dim = 1)
         return self.conv(x)
 
 class Norm(nn.Module): #Normalization layer
@@ -154,6 +160,17 @@ class Opening_and_Closing(nn.Module):
 #                                                                       #
 #########################################################################
 
+
+class UNet(nn.Module):
+    def __init__(self, n_channels, n_classes, mean, std):
+        super().__init__()
+        self.n_channels = n_channels
+        self.n_classes = n_classes
+
+        self.norm = Norm(mean, std)
+        self.inc = DoubleConv(n_channels, 64)
+        self.down
+
 ##  0.4506735083369092 - mean
 ##  0.057212669622861305 - std**2
 
@@ -201,7 +218,7 @@ class UNet1(UNet0):
     def __init__(self, n_channels, n_classes, mean, std):
         super().__init__(n_channels, n_classes, mean, std)
         self.down5 = Down(1024, 2048)
-        self.up5 = Up(2048, 512)
+        self.up5 = Up(2048, 1024)
 
     def forward(self, x):
         x = self.norm(x)
@@ -253,18 +270,21 @@ class UNetPP(nn.Module):
     def __init__(self, n_channels, n_classes, mean, std, depth, base_kernel_num):
         super().__init__()
         self.depth = depth
-        
+        self.n_channels = n_channels
+        self.n_classes = n_classes
         self.norm = Norm(mean, std)
-        self.encoder = [DoubleConv(n_channels, base_kernel_num)]
+        encoder = [DoubleConv(n_channels, base_kernel_num),]
 
         for i in range(1, depth):
-            self.encoder.append(Down(base_kernel_num*2**(i-1), base_kernel_num*2**i))
-
-        self.skip_conns_and_decoder = [[] for _ in range(depth-1)]
+            encoder.append(Down(base_kernel_num*2**(i-1), base_kernel_num*2**i))
+        
+        self.encoder = nn.ModuleList(encoder)
+        skip_conns_and_decoder = [[] for _ in range(depth-1)]
         for i in range(depth-1):
             for j in range(1,depth -i):
                 #One node gets j+1 outputs of convs -> (j+1)*channels
-                self.skip_conns_and_decoder[i].append(UpPP((base_kernel_num*2**i)*(j+1), base_kernel_num*2**i))
+                skip_conns_and_decoder[i].append(UpPP((base_kernel_num*2**i)*(j+1), base_kernel_num*2**i))
+        self.skip_conns_and_decoder = nn.ModuleList(nn.ModuleList(skip_conns_and_decoder[i]) for i in range(len(skip_conns_and_decoder)))
         """
         [
         [X, X, X, X],
@@ -280,12 +300,16 @@ class UNetPP(nn.Module):
         return "U-Net++"
     def forward(self, x: torch.Tensor):
         x = self.norm(x)
-
+        #print(x.dtype)
         encoded_x = [x,]
+        #print(encoded_x[-1].dtype)
         for X in self.encoder:
+            #print(len(encoded_x))
+            #print(encoded_x[-1].dtype)
             encoded_x.append(X(encoded_x[-1]))
+            
 
-        outputs = [[encoded_x[i],] for i in encoded_x[1:]]
+        outputs = [[i,] for i in encoded_x[1:]]
         for j in range(self.depth-1):
             for i in range(self.depth-1):
                 if len(self.skip_conns_and_decoder[i]) > j:
