@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torchvision import transforms
 import cv2
 import numpy as np
 
@@ -48,7 +49,7 @@ class Down(nn.Module):
 class Up(nn.Module):
     """Upscaling then double conv"""
 
-    def __init__(self, in_channels, out_channels, bilinear=True):
+    def __init__(self, in_channels, out_channels, bilinear=False):
         super().__init__()
         self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)
         self.conv = DoubleConv(in_channels, out_channels)
@@ -160,6 +161,39 @@ class Opening_and_Closing(nn.Module):
 #                                                                       #
 #########################################################################
 
+class Model(nn.Module):
+    def __init__(self, n_channels, n_classes, **kwargs):
+        super().__init__()
+        self.n_channels = n_channels
+        self.n_classes = n_classes
+
+    def predict(self, image:torch.Tensor, out_threshold:float = 0.5) -> np.ndarray:
+        """
+        Input: image        - already prepeared torch tensor for model processing"""
+        with torch.no_grad():
+            output = self.forward(image)
+            if self.n_classes > 1:
+                probs = nn.functional.softmax(output, dim=1)[0]
+            else:
+                probs = torch.sigmoid(output)[0]
+
+            tf = transforms.Compose([
+                transforms.ToPILImage(),
+                transforms.Resize((image.size()[1], image.size[0])),
+                transforms.ToTensor()
+            ])
+
+            full_mask = tf(probs.cpu()).squeeze()
+
+        if self.n_classes == 1:
+            return (full_mask > out_threshold).numpy()
+        else:
+            return nn.functional.one_hot(full_mask.argmax(dim=0), self.n_classes).permute(2, 0, 1).numpy()
+        
+    def __str__(self):
+        return self.__class__.__name__
+
+
 
 class UNet(nn.Module):
     def __init__(self, n_channels, n_classes, mean, std):
@@ -215,7 +249,7 @@ class UNet1(UNet0):
     """
     One more Maxpooling layer -> 1 level deeper
     """
-    def __init__(self, n_channels, n_classes, mean, std):
+    def __init__(self, n_channels, n_classes, mean, std, **kwargs):
         super().__init__(n_channels, n_classes, mean, std)
         self.down5 = Down(1024, 2048)
         self.up5 = Up(2048, 1024)
@@ -240,7 +274,7 @@ class UNet1(UNet0):
         return "U-Net1"
 
 class UNet2(UNet1):
-    def __init__(self, n_channels, n_classes, mean, std):
+    def __init__(self, n_channels, n_classes, mean, std, **kwargs):
         super().__init__(n_channels, n_classes, mean, std)
         self.down6 = Down(2048, 4096)
         self.up6 = Up(4096, 2048)
@@ -265,6 +299,45 @@ class UNet2(UNet1):
 
     def __str__(self):
         return "U-Net2"
+    
+class UNet(Model):
+    def __init__(self, n_channels, n_classes, mean, std, depth, bilinear = False, base_kernel = 64, **kwargs):
+        super().__init__(n_channels, n_classes)
+        self.depth = depth
+        self.norm = Norm(mean, std)
+
+        encoder = [DoubleConv(n_channels, base_kernel)]
+        for i in range(depth):
+            encoder.append(Down(base_kernel*(2**i), base_kernel*(2**(i+1))))
+
+        self.encoder = nn.ModuleList(encoder)
+
+
+        decoder = []
+        factor = 2 if bilinear else 1
+        for i in range(1,depth+1):
+            decoder.append(Up(base_kernel*(2**(depth-i))//factor,base_kernel*(2**(depth - i - 1)//factor)))
+
+        self.decoder = nn.ModuleList(decoder)
+
+        self.out_conv = OutConv(base_kernel, n_classes)
+
+    def forward(self, x):
+        x = self.norm(x)
+        skip_cons = [x]
+        for layer in self.encoder:
+            skip_cons.append(layer(skip_cons[-1]))
+
+        x = skip_cons[-1]
+        for index, layer in enumerate(self.decoder):
+            x = layer(x, skip_cons[-2-index])
+
+        logits = self.outc(x)
+        return logits
+    
+    def __str__(self):
+        return F"{self.__class__.__name__}: d={self.depth}"
+
 
 class UNetPP(nn.Module):
     def __init__(self, n_channels, n_classes, mean, std, depth, base_kernel_num):
