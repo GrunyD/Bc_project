@@ -315,8 +315,11 @@ class UNet(Model):
 
         decoder = []
         factor = 2 if bilinear else 1
-        for i in range(1,depth+1):
-            decoder.append(Up(base_kernel*(2**(depth-i))//factor,base_kernel*(2**(depth - i - 1)//factor)))
+        for i in range(depth):
+            inc = base_kernel*(2**(depth-i))//factor
+            outc = int(base_kernel*(2**(depth - i - 1))//factor)
+            
+            decoder.append(Up(inc, outc, bilinear))
 
         self.decoder = nn.ModuleList(decoder)
 
@@ -332,7 +335,7 @@ class UNet(Model):
         for index, layer in enumerate(self.decoder):
             x = layer(x, skip_cons[-2-index])
 
-        logits = self.outc(x)
+        logits = self.out_conv(x)
         return logits
     
     def __str__(self):
@@ -390,3 +393,6 @@ class UNetPP(nn.Module):
                     outputs[i].append(X(outputs[i+1][j], outputs[i]))
 
         return self.outConv(outputs[0][-1])
+
+
+

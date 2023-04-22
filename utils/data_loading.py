@@ -209,10 +209,26 @@ class ImageDataset(torch.utils.data.Dataset):
         return img_file[0]
         
     @staticmethod
-    def read_image(name):
+    def read_image(name, grayscale = True):
+        """
+        If grayscale is true, image with only one channnel is returned, no matter how many channels it has
+        f grayscale is false, grayscale images are scale to have 3 channel, multichannel images remain unchanged 
+        e.g. colors and even alpha channel remains
+        """
         image_pil = Image.open(name)
-        image = torch.Tensor(image_pil.getdata()).reshape(image_pil.size[1], image_pil.size[0])/255
-        image = image.reshape((1,*image.size()))
+        image = torch.Tensor(image_pil.getdata())
+        if len(image.size()) > 1:
+            image = image.reshape(image_pil.size[1], image_pil.size[0],image.size()[1])/255
+            image = image.permute((2, 0, 1))
+            if grayscale:
+                image = image[:1, :, :]
+        else:
+            image = image.reshape(image_pil.size[1], image_pil.size[0])/255
+            image = image.unsqueeze(0)
+            if not grayscale:
+                image = torch.vstack((image, image, image))
+
+        image = image.unsqueeze(0)
         return image
     
     def get_image(self, name):

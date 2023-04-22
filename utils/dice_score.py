@@ -2,6 +2,7 @@ import torch
 from torch import Tensor
 from torch.autograd import Variable
 
+
 def dice_coeff(input: Tensor, target: Tensor, reduce_batch_first: bool = False, epsilon=1e-6):
     # Average of Dice coefficient for all batches, or for a single mask
     assert input.size() == target.size()
@@ -35,10 +36,6 @@ def dice_loss(input: Tensor, target: Tensor, multiclass: bool = False):
     # Dice loss (objective to minimize) between 0 and 1
     assert input.size() == target.size()
     fn = multiclass_dice_coeff if multiclass else dice_coeff
-    return 1 - fn(input, target, reduce_batch_first=True)
+    return 1 - fn(input, target, reduce_batch_first=False)
 
-def dice_loss2(input, target):
-    inter = torch.sum(input*target)
-    sum = torch.sum(input) + torch.sum(target)
-    ret = Variable(1 - (2*inter+1e-6)/(sum + 1e-6), requires_grad = True)
-    return ret
+
