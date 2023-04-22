@@ -179,7 +179,7 @@ class Model(nn.Module):
 
             tf = transforms.Compose([
                 transforms.ToPILImage(),
-                transforms.Resize((image.size()[1], image.size[0])),
+                transforms.Resize((image.size()[1], image.size()[0])),
                 transforms.ToTensor()
             ])
 
@@ -195,15 +195,15 @@ class Model(nn.Module):
 
 
 
-class UNet(nn.Module):
-    def __init__(self, n_channels, n_classes, mean, std):
-        super().__init__()
-        self.n_channels = n_channels
-        self.n_classes = n_classes
+# class UNet(nn.Module):
+#     def __init__(self, n_channels, n_classes, mean, std):
+#         super().__init__()
+#         self.n_channels = n_channels
+#         self.n_classes = n_classes
 
-        self.norm = Norm(mean, std)
-        self.inc = DoubleConv(n_channels, 64)
-        self.down
+#         self.norm = Norm(mean, std)
+#         self.inc = DoubleConv(n_channels, 64)
+#         self.down
 
 ##  0.4506735083369092 - mean
 ##  0.057212669622861305 - std**2
@@ -269,6 +269,31 @@ class UNet1(UNet0):
         x = self.up1(x, x1)
         logits = self.outc(x)
         return logits
+
+    def predict(self, image):
+        with torch.no_grad():
+            output = self.forward(image)[0,:,:,:]
+            output = torch.argmax(output, dim = 0)
+            return np.uint8(output.cpu().numpy())
+        #     if self.n_classes > 1:
+        #         probs = nn.functional.softmax(output, dim=0)
+        #     else:
+        #         probs = torch.sigmoid(output)[0]
+
+        #     tf = transforms.Compose([
+        #         transforms.ToPILImage(),
+        #         transforms.Resize((image.size()[1], image.size()[0])),
+        #         transforms.ToTensor()
+        #     ])
+
+        #     full_mask = tf(probs.cpu()).squeeze()
+
+        # if self.n_classes == 1:
+        #     return (full_mask > out_threshold).numpy()
+        # else:
+        #     print(*full_mask.size())
+        #     return nn.functional.one_hot(full_mask.argmax(dim=0), self.n_classes).permute(2, 0, 1).numpy()
+        
     
     def __str__(self):
         return "U-Net1"

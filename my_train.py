@@ -3,10 +3,11 @@ from pathlib import Path
 import torch
 import wandb
 from tqdm import tqdm
+import numpy as np
 from os import path
 
 #My libraries
-from utils.augmentation_dataset import AugmentedDataset
+# from utils.augmentation_dataset import AugmentedDataset
 from utils.dice_score import dice_loss
 from evaluate import evaluate
 from unet.Unet_model import UNet1, UNet0, UNet2, UNetPP, Model, UNet
@@ -14,23 +15,25 @@ import unet
 from utils.data_loading import ImageDataset, NaivePseudoLablesDataset, BaseDataset, FourierTransformsPseudolabels
 from PIL import Image
 
+global run 
 
 # VERSION = "6.8"
 path_to_data = Path('/datagrid/personal/grundda/data/')
-get_path = lambda dir: path.join(path_to_data, Path(dir))
+get_path = lambda dir: Path(path.join(path_to_data, dir))
 
 DIRS = dict(
-    labeled_images = get_path('images1channel/'),
+    labeled_images = get_path('images/'),
     masks = get_path('masks/'),
     unlabeled_images = get_path('unlabeled_images/'),
     pseudolabels = get_path('pseudolabels/'),
-    val_images = get_path('vals_images1channel/')
+    val_images = get_path('val_images'),
+    models = Path('/datagrid/personal/grundda/models')
 )
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 EPOCHS = 70
-BATCH_SIZE = 2
+BATCH_SIZE =1
 
 #MODEL ARGS
 N_CHANNELS = 1
@@ -54,16 +57,21 @@ def generate_pseudolabels(net:Model):
     unlabeled_images_set = ImageDataset(DIRS['unlabeled_images'])
     images_loader = torch.utils.data.DataLoader(unlabeled_images_set, shuffle = False)
     pseudolabels = DIRS["pseudolabels"]
-
-    for index, image in enumerate(images_loader):
-        name = unlabeled_images_set.labeled_ids[index]
-        prediction = net.predict(image)
-        image = Image.fromarray(prediction)
-        image.save(F'{path.join(pseudolabels, name)}.png')
+    net.eval()
+    with tqdm(total=len(unlabeled_images_set), unit='img') as pbar:
+        for index, image in enumerate(images_loader):
+            name = unlabeled_images_set.labeled_ids[index]
+            image = image.to(DEVICE)
+            prediction = net.predict(image) #numpy array
+            image = Image.fromarray(np.uint8(prediction)*255)
+            image.save(F'{path.join(pseudolabels, name)}.png')
+            pbar.update(1)
+    net.train()
 
 
 def train(net, trainset,  val_set, experiment):
-    train_loader = torch.utils.data.DataLoader(trainset, shuffle = True, batch_num =BATCH_SIZE)
+    global run
+    train_loader = torch.utils.data.DataLoader(trainset, shuffle = True, batch_size =BATCH_SIZE)
     val_loader = torch.utils.data.DataLoader(val_set)
     n_train = len(trainset)
     
@@ -85,8 +93,8 @@ def train(net, trainset,  val_set, experiment):
     for epoch in range(1, EPOCHS+1):
         net.train()
 
-        # if epoch%20 == 0 and isinstance(trainset, NaivePseudoLablesDataset):
-        #     generate_pseudolabels(net)
+        if epoch%20 == 0 and isinstance(trainset, NaivePseudoLablesDataset):
+            generate_pseudolabels(net)
 
 
         with tqdm(total=n_train, desc=f'Epoch {epoch}/{EPOCHS}', unit='img') as pbar:
@@ -104,7 +112,7 @@ def train(net, trainset,  val_set, experiment):
 
                 with torch.cuda.amp.autocast(enabled=True):
                     masks_pred = net(images)
-                    loss = criterion(masks_pred, true_masks) + 3* dice_loss(torch.argmax(masks_pred, dim = 1).float(), true_masks.float())
+                    loss = criterion(masks_pred, true_masks) + dice_loss(torch.argmax(masks_pred, dim = 1).float(), true_masks.float())
 
                 optimizer.zero_grad(set_to_none=True)
                 grad_scaler.scale(loss).backward()
@@ -122,7 +130,7 @@ def train(net, trainset,  val_set, experiment):
                     
                 #############################
                 # Evaluation round
-                division_step = (n_train // (10 * BATCH_SIZE))
+                division_step = (n_train // 2)
                 if division_step > 0:
                     if global_step % division_step == 0:
                         with torch.no_grad():
@@ -133,25 +141,22 @@ def train(net, trainset,  val_set, experiment):
                                     'DSC': val_score,
                                     'epoch': epoch,
                                 })
-                            if val_score > best_dice:
-                                best_dict = net.state_dict().copy()
-                                best_dice = val_score
-                                last_improvement = epoch
+
             scheduler.step()
 
 
-    this_run = dict(net = best_dict, name = experiment.name, score = best_dice)
+        run = dict(net = net.state_dict(), name = experiment.name, score = best_dice)
     experiment.finish()   
     print(best_dice)
-    return this_run    
+    # return this_run    
 
-def define(model_type:type, pretrained_net:str = None, enable_augment:bool = True, pseudo_labels = None):
+def define(model_type:type, pretrained_model:str = None, enable_augment:bool = True, pseudo_labels = None):
 #################################################
 #   Defining net 
     net = model_type(n_channels=N_CHANNELS, n_classes=N_CLASSES,mean = MEAN, std = STD, depth = DEPTH)#, depth= 8, base_kernel_num = 32)
     net.to(device= DEVICE)
-    if pretrained_net is not None:
-        net.load_state_dict(torch.load(pretrained_net, map_location=DEVICE))
+    if pretrained_model is not None:
+        net.load_state_dict(torch.load(path.join(DIRS['models'],pretrained_model), map_location=DEVICE))
 
 #################################################
 #   Defining Data Loaders
@@ -189,13 +194,28 @@ def define(model_type:type, pretrained_net:str = None, enable_augment:bool = Tru
 
 
 def main():
-    net, trainset, valset, experiment = define(model_type = UNet, pretrained_model = None,enable_augment=True, pseudo_labels=0)
-    run = train(net, trainset, valset, experiment)
-    torch.save(run["net"], F"/datagrid/personal/grundda/models/{run['name']}_{run['score']:3f}.pth")
-    torch.cuda.empty_cache()
+    global run
+    pseudo_labels= None
+    net, trainset, valset, experiment = define(model_type = UNet1, 
+                                                # pretrained_model = 'engineer-holosuite-303_0.909114.pth',
+                                                pretrained_model = None,
+                                                enable_augment=True, 
+                                                pseudo_labels=pseudo_labels)
+    print("Initiale settings defined")
+    if pseudo_labels is not None:
+        generate_pseudolabels(net)
+        print("Pseudolabels generated")
+    try:
+        train(net, trainset, valset, experiment)
+
+    except Exception as err:
+        torch.save(run["net"], F"/datagrid/personal/grundda/models/{run['name']}_{run['score']:3f}.pth")
+        torch.cuda.empty_cache()
+        print(err)
 
 
 if __name__ == '__main__': 
-    for i in range(3):
-        main()
+    # for i in range(3):
+    #     main()
+    main()
 

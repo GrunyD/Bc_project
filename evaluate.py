@@ -6,7 +6,7 @@ from utils.dice_score import multiclass_dice_coeff, dice_coeff
 
 from torchvision import transforms
 import numpy as np
-from utils.data_loading import BasicDataset
+#from utils.data_loading import BasicDataset
 from PIL import Image
 import os
 

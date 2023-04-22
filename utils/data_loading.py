@@ -192,7 +192,7 @@ class ImageDataset(torch.utils.data.Dataset):
 
     def __init__(self, images_dir:str):
         self.labeled_images_dir = images_dir
-        self.image_path = images_dir
+        self.images_path = images_dir
 
         self.labeled_ids = [path.splitext(file)[0] for file in listdir(images_dir) if not file.startswith('.')]
         if not self.labeled_ids:
@@ -203,7 +203,7 @@ class ImageDataset(torch.utils.data.Dataset):
         return len(self.labeled_ids)
     
     def get_image_name(self, name):
-        img_file = list(self.image_path.glob(name + '.*'))
+        img_file = list(self.images_path.glob(name + '.*'))
 
         assert len(img_file) == 1, f'Either no image or multiple images found for the ID {name}: {img_file}'
         return img_file[0]
@@ -211,12 +211,18 @@ class ImageDataset(torch.utils.data.Dataset):
     @staticmethod
     def read_image(name):
         image_pil = Image.open(name)
-        image = torch.Tensor(image_pil.getdata()).reshape(image_pil.size[1], image_pil.size[0])/255
+        
+        image = torch.Tensor(image_pil.getdata())
+        channels = image.nelement()//(image_pil.size[1] * image_pil.size[0])
+        image = image.reshape(image_pil.size[1], image_pil.size[0], channels)/255
+        image = image[:,:, 0]
         image = image.reshape((1,*image.size()))
         return image
     
     def get_image(self, name):
-        name = self.get_image_name(name)
+        # name = self.get_image_name(name)
+        name = F'{name}.png'
+        name = path.join(self.images_path, name)
         image = self.read_image(name)
         return image
     
@@ -244,23 +250,25 @@ class BaseDataset(ImageDataset):
 
 
     def get_mask(self, name):
-        mask_file = list(self.masks_path.glob(name + '.*'))
+        # mask_file = list(self.masks_path.glob(name + '.*'))
 
-        assert len(mask_file) == 1, f'Either no mask or multiple masks found for the ID {name}: {mask_file}'
-
-        mask_pil = Image.open(mask_file[0])
+        # assert len(mask_file) == 1, f'Either no mask or multiple masks found for the ID {name}: {mask_file}'
+        name = path.join(self.masks_path, F'{name}.png')
+        mask_pil = Image.open(name)
         mask = torch.Tensor(mask_pil.getdata()).reshape(1,mask_pil.size[1], mask_pil.size[0])
-        return mask
+        return mask//255
 
     def augmentation_pipeline(self, img, mask):
         if self.enable_augment:
             tensor = torch.vstack((img, mask))
             pipeline = transforms.Compose([
-                #transforms.RandomVerticalFlip(),
-                #transforms.RandomHorizontalFlip(),
+                transforms.RandomVerticalFlip(),
+                transforms.RandomHorizontalFlip(),
                 #MyRandomGammaCorrection((0.6, 1.4), 0.3),
                 #MyRandomGaussianBlur((7,31), 0.3),
-                MyRandomAffine(translation_p=0, rotation_p=0.4, translation_range=(0.2, 0.2), max_rotation=20)
+                MyRandomCrop(p = 0.3, scale = 0.5),
+                MyRandomAffine(translation_p=0.4, rotation_p=0.4, translation_range=(0.2, 0.2), max_rotation=20),
+                MyRandomElastic(p = 0.2, alpha = (50,150))
             ])
             augmented_tensor = pipeline(tensor)
             return augmented_tensor[:-1,:,:], augmented_tensor[-1,:,:]
@@ -268,16 +276,22 @@ class BaseDataset(ImageDataset):
             return img, mask
         
     def process_image_mask(self, image, mask, name):
-        image, mask = self.augmentation_pipeline(image, mask)
-        mask = torch.squeeze(mask)
-
         assert image.size() == mask.size(), \
             f'Image and mask {name} should be the same size, but are {image.size()} and {mask.size()}'
-
-
+        # height = 847
+        # width = 1068
+        # if image.size() != torch.Tensor((height, width)):
+        #     left_right_padding = (width - image.size()[1])//2
+        #     top_bottom_padding = (height - image.size()[0])//2
+        #     image = torch.nn.functional.pad(image, (left_right_padding, left_right_padding, top_bottom_padding, top_bottom_padding))
+        #     mask = torch.nn.functional.pad(mask, (left_right_padding, left_right_padding, top_bottom_padding, top_bottom_padding))
+        
+        image, mask = self.augmentation_pipeline(image, mask)
+        mask = torch.squeeze(mask)
         return {
             'image': image.float().contiguous(),
             'mask': mask.long().contiguous()
+
         }
     
     def get_item(self, name):
@@ -316,7 +330,6 @@ class NaivePseudoLablesDataset(BaseDataset):
             name = self.labeled_ids[idx]
             self.images_path = self.labeled_images_dir
             self.masks_path = self.masks_dir
-        
         return name
 
     
