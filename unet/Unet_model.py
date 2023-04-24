@@ -195,15 +195,15 @@ class Model(nn.Module):
 
 
 
-class UNet(nn.Module):
-    def __init__(self, n_channels, n_classes, mean, std):
-        super().__init__()
-        self.n_channels = n_channels
-        self.n_classes = n_classes
+# class UNet(nn.Module):
+#     def __init__(self, n_channels, n_classes, mean, std):
+#         super().__init__()
+#         self.n_channels = n_channels
+#         self.n_classes = n_classes
 
-        self.norm = Norm(mean, std)
-        self.inc = DoubleConv(n_channels, 64)
-        self.down
+#         self.norm = Norm(mean, std)
+#         self.inc = DoubleConv(n_channels, 64)
+#         self.down
 
 class UNet0(nn.Module):
     def __init__(self, n_channels, n_classes, mean, std):

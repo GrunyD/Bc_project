@@ -292,7 +292,7 @@ class BaseDataset(ImageDataset):
         
         image, mask = self.augmentation_pipeline(image, mask)
         mask = torch.squeeze(mask)
-        clas = torch.unsqueeze((torch.sum(mask) > 0).to(torch.uint8),0)
+        clas = (torch.sum(mask) > 0).to(torch.uint8)
 
 
         return {

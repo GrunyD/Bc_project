@@ -10,6 +10,7 @@ from utils.dice_score import dice_loss
 from evaluate import evaluate
 from unet.Unet_model import  Model, UNet, Classification_UNet
 import unet
+from utils.loss_function import ClassSegLoss
 from utils.data_loading import ImageDataset, NaivePseudoLablesDataset, BaseDataset, FourierTransformsPseudolabels
 from PIL import Image
 
@@ -42,6 +43,9 @@ STD = 0.23807501840974526
 DEPTH = 5
 PSEUDO_LABELS = None
 NAME = 'NewUNET'
+
+#LOSS
+LOSS_FUNCTION = ClassSegLoss(x_weight=1, dice_weight=1, class_weight=1)
 
 
 # OPTIMIZER ARGS
@@ -77,7 +81,7 @@ def train(net, trainset,  val_set, experiment):
     #scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=PATIENCE)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer,120)
     grad_scaler = torch.cuda.amp.GradScaler(enabled=True)
-    criterion = torch.nn.CrossEntropyLoss()
+    # criterion = torch.nn.CrossEntropyLoss()
     global_step = 0
 
 
@@ -97,6 +101,7 @@ def train(net, trainset,  val_set, experiment):
             for batch in train_loader:
                 images = batch['image']
                 true_masks = batch['mask']
+                true_classes = batch['class']
 
                 assert images.shape[1] == net.n_channels, \
                         f'Network has been defined with {net.n_channels} input channels, ' \
@@ -105,11 +110,12 @@ def train(net, trainset,  val_set, experiment):
                 
                 images = images.to(device=DEVICE, dtype=torch.float32)
                 true_masks = true_masks.to(device=DEVICE, dtype=torch.long)
+                true_classes = true_classes.to(DEVICE, dtype = torch.long)
 
                 with torch.cuda.amp.autocast(enabled=True):
-                    masks_pred = net(images)
-                    loss = criterion(masks_pred, true_masks) + 3* dice_loss(torch.argmax(masks_pred, dim = 1).float(), true_masks.float())
-
+                    prediction = net(images)
+                    # loss = criterion(masks_pred, true_masks) + 3* dice_loss(torch.argmax(masks_pred, dim = 1).float(), true_masks.float())
+                    loss = LOSS_FUNCTION(prediction, true_masks, true_classes)
                 optimizer.zero_grad(set_to_none=True)
                 grad_scaler.scale(loss).backward()
                 grad_scaler.step(optimizer)
@@ -133,8 +139,10 @@ def train(net, trainset,  val_set, experiment):
                             val_score = evaluate(net, val_loader, DEVICE)
                             print(val_score)
                             experiment.log({
-                                    'learning rate': optimizer.param_groups[0]['lr'],
-                                    'DSC': val_score,
+                                    # 'learning rate': optimizer.param_groups[0]['lr'],
+                                    'DSC': val_score[0],
+                                    'DSC true positive': val_score[1],
+                                    'Classification': val_score[2],
                                     'epoch': epoch,
                                 })
                             if val_score > best_dice:
@@ -186,6 +194,8 @@ def define(model_type:type, pretrained_net:str = None, enable_augment:bool = Tru
 
                                     ))
     experiment.define_metric("DSC", summary ="max")
+    experiment.define_metric("DSC true positive", summary ="max")
+    experiment.define_metric("Classification", summary ="max")
 
 
 
