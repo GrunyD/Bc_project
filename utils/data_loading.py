@@ -228,7 +228,7 @@ class ImageDataset(torch.utils.data.Dataset):
             if not grayscale:
                 image = torch.vstack((image, image, image))
 
-        image = image.unsqueeze(0)
+        # image = image.unsqueeze(0)
         return image
     
     def get_image(self, name):
@@ -272,6 +272,7 @@ class BaseDataset(ImageDataset):
 
     def augmentation_pipeline(self, img, mask):
         if self.enable_augment:
+            
             tensor = torch.vstack((img, mask))
             pipeline = transforms.Compose([
                 transforms.RandomVerticalFlip(),
@@ -290,20 +291,16 @@ class BaseDataset(ImageDataset):
     def process_image_mask(self, image, mask, name):
         assert image.size() == mask.size(), \
             f'Image and mask {name} should be the same size, but are {image.size()} and {mask.size()}'
-        # height = 847
-        # width = 1068
-        # if image.size() != torch.Tensor((height, width)):
-        #     left_right_padding = (width - image.size()[1])//2
-        #     top_bottom_padding = (height - image.size()[0])//2
-        #     image = torch.nn.functional.pad(image, (left_right_padding, left_right_padding, top_bottom_padding, top_bottom_padding))
-        #     mask = torch.nn.functional.pad(mask, (left_right_padding, left_right_padding, top_bottom_padding, top_bottom_padding))
         
         image, mask = self.augmentation_pipeline(image, mask)
         mask = torch.squeeze(mask)
+        clas = (torch.sum(mask) > 0).to(torch.uint8)
+
+
         return {
             'image': image.float().contiguous(),
-            'mask': mask.long().contiguous()
-
+            'mask': mask.long().contiguous(),
+            'class': clas.long().contiguous()
         }
     
     def get_item(self, name):

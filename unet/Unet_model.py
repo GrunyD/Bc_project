@@ -205,9 +205,6 @@ class Model(nn.Module):
 #         self.inc = DoubleConv(n_channels, 64)
 #         self.down
 
-##  0.4506735083369092 - mean
-##  0.057212669622861305 - std**2
-
 class UNet0(nn.Module):
     def __init__(self, n_channels, n_classes, mean, std):
         super().__init__()
@@ -325,7 +322,106 @@ class UNet2(UNet1):
     def __str__(self):
         return "U-Net2"
     
+class Encoder(torch.nn.Module):
+    def __init__(self, n_channels, mean, std, depth, base_kernel = 64, **kwargs):
+        super().__init__()
+        self.depth = depth
+
+        self.norm = Norm(mean, std)
+
+        encoder = [DoubleConv(n_channels, base_kernel)]
+        for i in range(depth):
+            encoder.append(Down(base_kernel*(2**i), base_kernel*(2**(i+1))))
+
+        self.encoder = nn.ModuleList(encoder)
+
+    def forward(self, x):
+        x = self.norm(x)
+        skip_cons = [x]
+        for layer in self.encoder:
+            skip_cons.append(layer(skip_cons[-1]))
+
+        return skip_cons
+    
+class Decoder(torch.nn.Module):
+    def __init__(self, n_classes, depth, base_kernel = 64, bilinear = False, **kwargs):
+        super().__init__()
+        decoder = []
+        factor = 2 if bilinear else 1
+        for i in range(depth):
+            inc = base_kernel*(2**(depth-i))//factor
+            outc = int(base_kernel*(2**(depth - i - 1))//factor)
+            
+            decoder.append(Up(inc, outc, bilinear))
+
+        self.decoder = nn.ModuleList(decoder)
+
+        self.out_conv = OutConv(base_kernel, n_classes)
+
+    def forward(self, skip_cons):
+        x = skip_cons[-1]
+        for index, layer in enumerate(self.decoder):
+            x = layer(x, skip_cons[-2-index])
+
+        logits = self.out_conv(x)
+        return logits
+    
+
 class UNet(Model):
+    def __init__(self, n_channels, n_classes, mean, std, depth, bilinear = False, base_kernel = 64, **kwargs):
+        super().__init__(n_channels, n_classes)
+        self.encoder = Encoder(n_channels, mean, std, depth, base_kernel)
+        self.decoder = Decoder(n_classes, depth, base_kernel, bilinear)
+
+    def forward(self, x):
+        skip_cons = self.encoder(x)
+        return {"segmentation": self.decoder(skip_cons)}
+    
+
+class Classifier(torch.nn.Module):
+    def __init__(self, depth, base_kernel = 64):
+        super().__init__()
+        # self.conv = DoubleConv(base_kernel*2**depth, 64)
+        # self.flatten = torch.nn.Linear(64*33*26, 1000)
+        # self.decide = torch.nn.Linear(1000, 2)
+        decoder = []
+        for i in range(depth):
+            inc = base_kernel*(2**(depth-i))
+            outc = int(base_kernel*(2**(depth - i - 1)))
+            
+            decoder.append(DoubleConv(inc, outc))
+
+        self.decoder = nn.ModuleList(decoder)
+        image_width = 1068//2**depth
+        image_height = 847//2**depth
+        self.linear_decide = nn.Linear(image_height*image_width*base_kernel, 2)
+
+
+    def forward(self, x):
+        for layer in self.decoder:
+            x = layer(x)
+        x = torch.flatten(x, 1)
+        x = self.linear_decide(x)
+        return x
+        
+
+class Classification_UNet(UNet):
+    def __init__(self, n_channels, n_classes, mean, std, depth, bilinear = False, base_kernel = 64, **kwargs):
+        super().__init__(n_channels, n_classes, mean, std, depth, bilinear, base_kernel, **kwargs)
+
+        
+        self.classifier = Classifier(depth, base_kernel)
+
+    def forward(self, x):
+        skip_cons = self.encoder(x)
+
+        ret = {"segmentation": self.decoder(skip_cons),
+              "classification": self.classifier(skip_cons[-1])}
+
+        return ret
+    
+
+class UNet9(Model):
     def __init__(self, n_channels, n_classes, mean, std, depth, bilinear = False, base_kernel = 64, **kwargs):
         super().__init__(n_channels, n_classes)
         self.depth = depth
