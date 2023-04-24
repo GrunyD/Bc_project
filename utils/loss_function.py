@@ -14,7 +14,7 @@ class SegmentationLoss():
     def dice_loss(self, prediction, target):
         predicted_segmentation = torch.argmax(prediction, dim = 1).float()
         target = target.float()
-        return self._dice_weight * dice_loss(predicted_segmentation, target)
+        return self.dice_weight * dice_loss(predicted_segmentation, target)
     
     def seg_loss(self, prediction, target):
         return self.x_loss(prediction, target) + self.dice_loss(prediction, target)

@@ -18,7 +18,7 @@ from PIL import Image
 global run 
 
 # VERSION = "6.8"
-path_to_data = Path('/datagrid/personal/grundda/data/')
+path_to_data = Path('/home.stud/grundda2/.local/data/')
 get_path = lambda dir: Path(path.join(path_to_data, dir))
 
 DIRS = dict(
@@ -31,12 +31,13 @@ DIRS = dict(
 )
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+# DEBUG = True
 
 EPOCHS = 50
 BATCH_SIZE = 2
 
 #MODEL ARGS
-MODEL_TYPE = UNet
+MODEL_TYPE = Classification_UNet
 ENABLE_AUGMENT = True
 PRETRAINED_MODEL = None
 N_CHANNELS = 1
@@ -45,7 +46,7 @@ MEAN = 0.4593777512924429
 STD = 0.23807501840974526
 DEPTH = 5
 PSEUDO_LABELS = None
-NAME = 'NewUNET'
+NAME = 'NewUNETClas'
 
 #LOSS
 LOSS_FUNCTION = ClassSegLoss(x_weight=1, dice_weight=1, class_weight=1)
@@ -135,7 +136,7 @@ def train(net, trainset,  val_set, experiment):
                 # Visible bar and wandb
 
                 pbar.update(images.shape[0])
-                global_step += 1
+                global_step += BATCH_SIZE
                 # pbar.set_postfix(**{'loss (batch)': loss.item()})
 
                     
@@ -146,14 +147,16 @@ def train(net, trainset,  val_set, experiment):
                     if global_step % division_step == 0:
                         with torch.no_grad():
                             val_score = evaluate(net, val_loader, DEVICE)
-                            print(val_score)
+                            print(F"DSC: {val_score[0]}\nDSC true positive: {val_score[1]}\nClassification: {val_score[2]}")
+                            # print(val_score)
                             experiment.log({
                                     # 'learning rate': optimizer.param_groups[0]['lr'],
                                     'DSC': val_score[0],
                                     'DSC true positive': val_score[1],
-                                    'Classification': val_score[2],
                                     'epoch': epoch,
                                 })
+                            if prediction.get('classification') is not None:
+                                experiment.log({'Classification': val_score[2],'epoch':epoch})
 
             scheduler.step()
 
@@ -193,6 +196,7 @@ def define(model_type:type, pretrained_model:str = None, enable_augment:bool = T
 
 #################################################
 #   Defining Wandb
+    
     experiment = wandb.init(project='bc_project', entity="gruny", reinit = True)#Reinit = True is for multiple runs in one script
     experiment.config.update(dict(epochs=EPOCHS, 
                                     batch_size=BATCH_SIZE, 

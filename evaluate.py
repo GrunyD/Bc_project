@@ -32,23 +32,29 @@ def evaluate(net, dataloader, device):
 
         with torch.no_grad():
             # predict the mask
-            mask_pred = net(image)
+            prediction = net(image)
+            mask_pred = prediction['segmentation']
+            class_pred = prediction.get('classification')
             dice_score = 0
             # convert to one-hot format
             if net.n_classes == 1:
-                prediction = (F.sigmoid(mask_pred) > 0.5).float()
-                mask_pred = prediction['segmentation']
+                mask_pred = (F.sigmoid(mask_pred) > 0.5).float()
                 
                 # compute the Dice score
                 dice_score += dice_coeff(mask_pred, mask_true, reduce_batch_first=False)
+                if class_pred is not None:
+                    class_pred = (F.sigmoid(class_pred)>0.5).float()
+                else:
+                    class_pred = 0
             else:
-                prediction = F.one_hot(mask_pred.argmax(dim=1), net.n_classes).permute(0, 3, 1, 2).float()
-                mask_pred = prediction['segmentation']
+                mask_pred = F.one_hot(mask_pred.argmax(dim=1), net.n_classes).permute(0, 3, 1, 2).float()
                 # compute the Dice score, ignoring background
                 dice_score += multiclass_dice_coeff(mask_pred[:, 1:, ...], mask_true[:, 1:, ...], reduce_batch_first=False)
-        
-        
-        class_pred = 0  if prediction.get('classification') is None else prediction['classification']
+                if class_pred is not None:
+                    class_pred = (torch.argmax(class_pred)).float()
+                else:
+                    class_pred = 0
+    
 
         dice_score_all += dice_score
         if true_class[0] == 1:
