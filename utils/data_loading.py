@@ -228,7 +228,7 @@ class ImageDataset(torch.utils.data.Dataset):
             if not grayscale:
                 image = torch.vstack((image, image, image))
 
-        image = image.unsqueeze(0)
+        # image = image.unsqueeze(0)
         return image
     
     def get_image(self, name):
@@ -266,17 +266,20 @@ class BaseDataset(ImageDataset):
 
         mask_pil = Image.open(mask_file[0])
         mask = torch.Tensor(mask_pil.getdata()).reshape(1,mask_pil.size[1], mask_pil.size[0])
+        # mask = torch.unsqueeze(mask, 0)
         return mask
 
     def augmentation_pipeline(self, img, mask):
         if self.enable_augment:
+            
             tensor = torch.vstack((img, mask))
             pipeline = transforms.Compose([
-                #transforms.RandomVerticalFlip(),
-                #transforms.RandomHorizontalFlip(),
-                #MyRandomGammaCorrection((0.6, 1.4), 0.3),
-                #MyRandomGaussianBlur((7,31), 0.3),
-                MyRandomAffine(translation_p=0, rotation_p=0.4, translation_range=(0.2, 0.2), max_rotation=20)
+                transforms.RandomVerticalFlip(),
+                transforms.RandomHorizontalFlip(),
+                MyRandomElastic(1, (50, 150)),
+                MyRandomAffine(translation_p=0.4, rotation_p=0.4, translation_range=(0.2, 0.2), max_rotation=20),
+                MyRandomCrop(1, (0.5, 1.)),
+               
             ])
             augmented_tensor = pipeline(tensor)
             return augmented_tensor[:-1,:,:], augmented_tensor[-1,:,:]
@@ -284,16 +287,18 @@ class BaseDataset(ImageDataset):
             return img, mask
         
     def process_image_mask(self, image, mask, name):
-        image, mask = self.augmentation_pipeline(image, mask)
-        mask = torch.squeeze(mask)
-
         assert image.size() == mask.size(), \
             f'Image and mask {name} should be the same size, but are {image.size()} and {mask.size()}'
+        
+        image, mask = self.augmentation_pipeline(image, mask)
+        mask = torch.squeeze(mask)
+        clas = torch.unsqueeze((torch.sum(mask) > 0).to(torch.uint8),0)
 
 
         return {
             'image': image.float().contiguous(),
-            'mask': mask.long().contiguous()
+            'mask': mask.long().contiguous(),
+            'class': clas.long().contiguous()
         }
     
     def get_item(self, name):

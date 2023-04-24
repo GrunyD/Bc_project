@@ -6,10 +6,9 @@ from tqdm import tqdm
 from os import path
 
 #My libraries
-from utils.augmentation_dataset import AugmentedDataset
 from utils.dice_score import dice_loss
 from evaluate import evaluate
-from unet.Unet_model import UNet1, UNet0, UNet2, UNetPP, Model, UNet
+from unet.Unet_model import  Model, UNet, Classification_UNet
 import unet
 from utils.data_loading import ImageDataset, NaivePseudoLablesDataset, BaseDataset, FourierTransformsPseudolabels
 from PIL import Image
@@ -29,15 +28,20 @@ DIRS = dict(
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-EPOCHS = 70
+EPOCHS = 50
 BATCH_SIZE = 2
 
 #MODEL ARGS
+MODEL_TYPE = UNet
+ENABLE_AUGMENT = True
+PRETRAINED_MODEL = None
 N_CHANNELS = 1
 N_CLASSES = 2
-MEAN = 0.4506735083369092
-STD = 0.23919170057270236
+MEAN = 0.4593777512924429
+STD = 0.23807501840974526
 DEPTH = 5
+PSEUDO_LABELS = None
+NAME = 'NewUNET'
 
 
 # OPTIMIZER ARGS
@@ -63,7 +67,7 @@ def generate_pseudolabels(net:Model):
 
 
 def train(net, trainset,  val_set, experiment):
-    train_loader = torch.utils.data.DataLoader(trainset, shuffle = True, batch_num =BATCH_SIZE)
+    train_loader = torch.utils.data.DataLoader(trainset, shuffle = True, batch_size =BATCH_SIZE)
     val_loader = torch.utils.data.DataLoader(val_set)
     n_train = len(trainset)
     
@@ -148,7 +152,7 @@ def train(net, trainset,  val_set, experiment):
 def define(model_type:type, pretrained_net:str = None, enable_augment:bool = True, pseudo_labels = None):
 #################################################
 #   Defining net 
-    net = model_type(n_channels=N_CHANNELS, n_classes=N_CLASSES,mean = MEAN, std = STD, depth = DEPTH)#, depth= 8, base_kernel_num = 32)
+    net = model_type(n_channels=N_CHANNELS, n_classes=N_CLASSES,mean = MEAN, std = STD, depth = DEPTH)
     net.to(device= DEVICE)
     if pretrained_net is not None:
         net.load_state_dict(torch.load(pretrained_net, map_location=DEVICE))
@@ -178,7 +182,7 @@ def define(model_type:type, pretrained_net:str = None, enable_augment:bool = Tru
                                     batch_size=BATCH_SIZE, 
                                     architecture = str(net),
                                     dataset = str(trainset),
-                                    semisupervised = False,
+                                    semisupervised = str(False  if PSEUDO_LABELS is None else True),
 
                                     ))
     experiment.define_metric("DSC", summary ="max")
@@ -189,13 +193,19 @@ def define(model_type:type, pretrained_net:str = None, enable_augment:bool = Tru
 
 
 def main():
-    net, trainset, valset, experiment = define(model_type = UNet, pretrained_model = None,enable_augment=True, pseudo_labels=0)
+    net, trainset, valset, experiment = define(model_type = MODEL_TYPE, 
+                                            pretrained_model = PRETRAINED_MODEL,
+                                            enable_augment=ENABLE_AUGMENT, 
+                                            pseudo_labels=PSEUDO_LABELS)
+    
     run = train(net, trainset, valset, experiment)
-    torch.save(run["net"], F"/datagrid/personal/grundda/models/{run['name']}_{run['score']:3f}.pth")
+    name = run['name'] if run['name'] is not None else NAME
+    torch.save(run["net"], F"/datagrid/personal/grundda/models/{name}_{run['score']:3f}.pth")
     torch.cuda.empty_cache()
 
 
 if __name__ == '__main__': 
-    for i in range(3):
-        main()
+    # for i in range(3):
+    #     main()
+    main()
 
