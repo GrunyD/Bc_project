@@ -59,7 +59,7 @@ def evaluate(net, dataloader, device):
         dice_score_all += dice_score
         if true_class[0] == 1:
             num_true_positive += 1
-            classification += class_pred
+            classification += int(class_pred == int(torch.sum(mask_pred) > 0))
             dice_score_true_positive += dice_score
             
 
@@ -70,7 +70,7 @@ def evaluate(net, dataloader, device):
     # Fixes a potential division by zero error
     if num_val_batches == 0:
         return dice_score
-    return dice_score / num_val_batches, dice_score_true_positive/num_true_positive, classification/num_true_positive
+    return dice_score_all / num_val_batches, dice_score_true_positive/num_true_positive, classification/num_val_batches
 
 
 ####################################################################

@@ -46,7 +46,7 @@ MEAN = 0.4593777512924429
 STD = 0.23807501840974526
 DEPTH = 5
 PSEUDO_LABELS = None
-NAME = 'NewUNETClas'
+NAME = 'NewUNET'
 
 #LOSS
 LOSS_FUNCTION = ClassSegLoss(x_weight=1, dice_weight=1, class_weight=1)
@@ -164,7 +164,7 @@ def train(net, trainset,  val_set, experiment):
         run = dict(net = net.state_dict(), name = experiment.name, score = best_dice)
     experiment.finish()   
     print(best_dice)
-    # return this_run    
+    return run    
 
 def define(model_type:type, pretrained_model:str = None, enable_augment:bool = True, pseudo_labels = None):
 #################################################
@@ -221,7 +221,10 @@ def main():
                                             pseudo_labels=PSEUDO_LABELS)
     
     run = train(net, trainset, valset, experiment)
-    name = run['name'] if run['name'] is not None else NAME
+    if run is not None:
+        name = run['name'] if run['name'] is not None else NAME
+    else:
+        name = NAME
     torch.save(run["net"], F"/datagrid/personal/grundda/models/{name}_{run['score']:3f}.pth")
     torch.cuda.empty_cache()
 
