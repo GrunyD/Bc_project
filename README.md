@@ -37,9 +37,9 @@ You do not have to install it but is is a nice tool to see that your code is run
 #### Wandb
 Tool for mapping your runs and hyperparameters. Can only recommend.
 
-I used python 3.10.4 downloaded form python.org
+A lot of requirements could be installed because of these two. You can directly install requirements thorugh pip or install these two, pytorch and see what is missing.
 
-#### Pytorch
+I used python 3.10.4 downloaded form python.org
 
 ## How to run
 python3 my_train.py
