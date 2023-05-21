@@ -20,14 +20,17 @@ class bcolors:
     UNDERLINE = '\033[4m'
 
 ONLY_CLASSIFICATION = False
+DETECTION_EVALUATION = True
 IMAGE_CLASS_INFO = False
 EVALUATION_IMAGES = False
 
+
 PATH_TO_IMAGES = '/home.stud/grundda2/.local/data/val_images'
 PATH_TO_MASKS = '/home.stud/grundda2/.local/data/masks'
+PATH_TO_TEXT_LABELS = "/home.stud/grundda2/bc_project/darknet/data/dental_labels"
 COMPARISON_IMAGES = False
 
-CONFIDENCE_THRESHOLD = 0.6
+CONFIDENCE_THRESHOLD = 0.78
 CONFIDENCE_COLORS = [(0, 255, 0), (200, 255, 0), (255, 255, 0), (255, 200, 0), (255, 0, 0)]
 
 DARKNET = '/home.stud/grundda2/bc_project/darknet/'
@@ -74,8 +77,8 @@ def boxes_result(outs, shape, confidence_threshold = None):
                 center_y = int(detection[1] * shape[0])
                 w = int(detection[2] * shape[1])
                 h = int(detection[3] * shape[0])
-                x = center_x - w / 2
-                y = center_y - h / 2
+                x = int(center_x - w / 2)
+                y = int(center_y - h / 2)
                 # class_ids.append(class_id)
                 confidences.append(float(confidence))
                 boxes.append([x, y, w, h])
@@ -99,7 +102,23 @@ def positives_negatives(prediction:int, true_class:int, pos_neg:dict):
     pos_neg[key] += 1
     return pos_neg
 
-    
+def get_mask_of_bboxes(boxes, shape):
+    mask = np.zeros(shape)
+    for box in boxes:
+        mask[box[1]:box[1]+box[3], box[0]:box[0]+box[2]] = 1 #Box is of shape [x,y,w,h]
+    return mask
+
+def get_true_centers_from_file(path_to_file, shape):
+    with open(path_to_file, "r") as f:
+        lines = f.readlines()
+    lines = [line for line in lines if line != '\n']
+    centers = list(map(lambda x: list(x.split(" "))[1:3], lines))# Ignores class and gets first and second number
+    centers = list(map(lambda x:[int(float(x[0])*shape[1]), int(float(x[1])*shape[0])],centers))
+    centers_mask = np.zeros(shape)
+    for center in centers:
+        centers_mask[center[1], center[0]] = 1
+    return centers_mask
+
 def get_result(outs, shape, confidence_threshold):
     if ONLY_CLASSIFICATION:
         return classification_result(outs, confidence_threshold)
@@ -116,6 +135,7 @@ def eval_model(net, confidence_threshold = None):
     False_positive = 0,
     False_negative = 0,
     )
+    count_found_centers = []
     with tqdm(total = len(os.listdir(PATH_TO_IMAGES)), unit = 'img') as pbar:
         for image_name in os.listdir(PATH_TO_IMAGES):
             pbar.update(1)
@@ -131,6 +151,13 @@ def eval_model(net, confidence_threshold = None):
             if not ONLY_CLASSIFICATION:
                 boxes, confidences =prediction[0],prediction[1]
                 prediction = int(len(boxes) > 0)
+                if DETECTION_EVALUATION:
+                    true_centers = get_true_centers_from_file(os.path.join(PATH_TO_TEXT_LABELS, F"{image_name[:-3]}txt"), shape)
+                    num_true_centers = np.sum(true_centers)
+                    if num_true_centers > 0:
+                        bbox_mask = get_mask_of_bboxes(boxes, shape)
+                        found_centers = np.sum(bbox_mask*true_centers)
+                        count_found_centers.append([found_centers,num_true_centers])
 
             classification_score += int(prediction == true_class)
             pos_neg = positives_negatives(prediction, true_class, pos_neg)
@@ -156,6 +183,9 @@ def eval_model(net, confidence_threshold = None):
 
     recall = pos_neg['True_positive']/(pos_neg['True_positive'] + pos_neg['False_negative'] + 1e-7)
     print(F"Recall: {recall}")
+
+    detection_boxes = np.array(count_found_centers)
+    print("Found centers: ", np.sum(detection_boxes,axis=0))
 
     return classification_rate, precision, recall
 
@@ -206,12 +236,15 @@ def draw_bounding_boxes(image_path:str, boxes:list, confidences:list, segmask_pa
     else:
         return image
 
-def eval_trained_weights():
-    number_of_weights = len(os.listdir(WEIGHTS))
+def eval_trained_weights(trained_weights:list = None):
+    if trained_weights is None:
+        trained_weights = os.listdir(WEIGHTS)
+    number_of_weights = len(trained_weights)
     result = {}
-    thresholds = [i/100 for i in range(50, 96, 2)]
+    # thresholds = [i/100 for i in range(50, 96, 2)]
+    thresholds = [0.3,]
     with tqdm(total = number_of_weights, unit='model') as pbar:
-        for weights in os.listdir(WEIGHTS):
+        for weights in trained_weights:
             net = cv.dnn.readNet(os.path.join(WEIGHTS,weights), CFG)
             desc = (list(weights.split('_')))[-1]
             result[weights] = []
@@ -230,36 +263,107 @@ def precision_recall_curve(precision_recall_dict):
     for key in precision_recall_dict:
         arr = np.array(precision_recall_dict[key])
         threshold = arr[:, 0]
-        rate = arr[:, 1]
+        accuracy = arr[:, 1]
         precision = arr[:, 2]
         recall = arr[:, 3]
-
-        ax1.plot(recall, precision, label = key)
-        ax2.plot(threshold, rate, label = key)
+        
+        label_name = F"{key} iterations"
+        ax1.plot(recall, precision, label = label_name)
+        ax2.plot(threshold, accuracy, label = label_name)
 
     ax1.set_title('Precision-Recall Curve')
     ax1.set_ylabel('Precision')
     ax1.set_xlabel('Recall')
+    
 
     ax2.set_title('Correctly classified images')
-    ax2.set_ylabel('Fraction of correctly classified images')
+    ax2.set_ylabel('Accuracy')
     ax2.set_xlabel('Confidence threshold')
+    
 
-    ax1.legend(loc = 'lower left')
-    ax2.legend(loc = 'lower left')
+    # ax1.legend(loc = 'upper left')
+    # ax2.legend(loc = 'lower left')
 
-    fig1.savefig('Precision_recall_curve.png')
-    fig2.savefig('Classification score.png')
+    fig1.savefig('Precision_recall_curve_test.png')
+    fig2.savefig('Accuracy_test.png')
 
-def main():
-    result = eval_trained_weights()
-    with open('precision.pkl', 'wb') as f:
-        pickle.dump(result, f)
-    precision_recall_curve(result)
+def precision_recall_on_threshold(precision_recall_dict):
+    fig1, ax1 = plt.subplots()
+    fig2, ax2 = plt.subplots()
+    for key in precision_recall_dict:
+        arr = np.array(precision_recall_dict[key])
+        threshold = arr[:, 0]
+        rate = arr[:, 1]
+        precision = arr[:, 2]
+        recall = arr[:, 3]
+        precision+=1
+        label_name = F"{key} iterations"
+        ax1.plot(threshold, recall, label = label_name)
+        ax2.plot(threshold,precision, label = label_name)
+    print(recall)
+
+    ax1.set_title('Recall with respect to confidence threshold')
+    ax1.set_xlabel('Confidence threshold')
+    ax1.set_ylabel('Recall')
+
+    ax2.set_title('Precision with respect to confidence threshold')
+    ax2.set_xlabel('Confidence threshold')
+    ax2.set_ylabel('Precision')
+
+    # ax1.legend(loc = 'lower left')
+    # ax2.legend(loc = 'upper left')
+
+    fig1.savefig('Recall_wr_threshold_you.png')
+    fig2.savefig('Precision_wr_threshold_you.png')
+
+def rename_keys(d:dict):
+    for old_key in list(d.keys()):
+        if old_key == 'yolov3-voc.backup':
+            del d[old_key]
+            continue
+        new_key = list(old_key.split('_'))[-1]
+        new_key = list(new_key.split('.'))[0]
+        if len(new_key) > 3:
+            new_key = new_key[:-1]
+        new_key = int(new_key)
+        d[new_key] = d.pop(old_key)
+
+    return d
+
+
+    
+
+def main_eval(trained_weights = None):
+    result = eval_trained_weights(trained_weights)
+    # with open('precision4.pkl', 'wb') as f:
+    #     pickle.dump(result, f)
+    
+    # print(result)
+    # with open('precision4.pkl', 'rb') as f:
+    #    result = pickle.load(f)
+    # print(list(result.keys()))
+    # r = dict(sorted(rename_keys(result).items(), key = lambda x: x[0])[-4:])
+    # best = np.array(r[2000])
+    # print(best)
+    # print(best[:, 0:2])
+    # print(best[:, 1])
+    # print(list(r.keys()))
+    # precision_recall_curve(result)
+    # precision_recall_on_threshold(result)
+    # result = np.array(result['yolov3-voc_20000.weights'])
+    # for index, name in enumerate(['Threshold', "Accuracy", "Precision", "Recall"]):
+    #     print(name, result[:, index])
 
 
 
 
 
 if __name__ == "__main__":
-    main()
+    main_eval(['yolov3-voc_20000.weights',])# 'yolov3-voc_10000.weights',
+               #'yolov3-voc_30000.weights','yolov3-voc_40000.weights'])
+    # result = {}
+    # thresholds = [i/100 for i in range(50, 96, 2)]
+    # for weights in ['yolov3-voc_10000.weights', 'yolov3-voc_20000.weights']:
+    #     net = cv.dnn.readNet(os.path.join(WEIGHTS,'yolov3-voc_10000.weights'), CFG)
+        
+    #     eval_model(net, CONFIDENCE_THRESHOLD)

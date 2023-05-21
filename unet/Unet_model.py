@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from torchvision import transforms
 import cv2
 import numpy as np
+from . import segalg
 
 #########################################################################
 #                                                                       #
@@ -21,30 +22,38 @@ class DoubleConv(nn.Module):
             mid_channels = out_channels
         self.double_conv = nn.Sequential(
             nn.Conv2d(in_channels, mid_channels, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(mid_channels),
+            nn.BatchNorm2d(mid_channels, track_running_stats=False),
             nn.ReLU(inplace=True),
             nn.Conv2d(mid_channels, out_channels, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(out_channels),
+            nn.BatchNorm2d(out_channels, track_running_stats=False),
             nn.ReLU(inplace=True)
         )
 
     def forward(self, x):
         return self.double_conv(x)
 
-
 class Down(nn.Module):
     """Downscaling with maxpool then double conv"""
 
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, conv_downsample = False):
         super().__init__()
+        # if conv_downsample:
+        #     self.down = nn.Sequential(
+        #         nn.Conv2d(in_channels, in_channels, kernel_size=3, padding = 1, stride=2),
+        #         DoubleConv(in_channels, out_channels)
+        #     )
+            
+        # else:
+        #     self.down = nn.Sequential(
+        #         nn.MaxPool2d(2),
+        #         DoubleConv(in_channels, out_channels)
+        #     )
         self.maxpool_conv = nn.Sequential(
-            nn.MaxPool2d(2),
-            DoubleConv(in_channels, out_channels)
-        )
+                nn.MaxPool2d(2),
+                DoubleConv(in_channels, out_channels))
 
     def forward(self, x):
         return self.maxpool_conv(x)
-
 
 class Up(nn.Module):
     """Upscaling then double conv"""
@@ -152,178 +161,14 @@ class Opening_and_Closing(nn.Module):
     def forward(self, x):
         return torch.from_numpy(self.closing(self.opening(x)))
 
-
-
-
 #########################################################################
 #                                                                       #
-#                           Unet models                                 #
+#                            Ensembling                                 #
 #                                                                       #
 #########################################################################
 
-class Model(nn.Module):
-    def __init__(self, n_channels, n_classes, **kwargs):
-        super().__init__()
-        self.n_channels = n_channels
-        self.n_classes = n_classes
-
-    def predict(self, image:torch.Tensor, out_threshold:float = 0.5) -> np.ndarray:
-        """
-        Input: image        - already prepeared torch tensor for model processing"""
-        with torch.no_grad():
-            output = self.forward(image)
-            if self.n_classes > 1:
-                probs = nn.functional.softmax(output, dim=1)[0]
-            else:
-                probs = torch.sigmoid(output)[0]
-
-            tf = transforms.Compose([
-                transforms.ToPILImage(),
-                transforms.Resize((image.size()[1], image.size()[0])),
-                transforms.ToTensor()
-            ])
-
-            full_mask = tf(probs.cpu()).squeeze()
-
-        if self.n_classes == 1:
-            return (full_mask > out_threshold).numpy()
-        else:
-            return nn.functional.one_hot(full_mask.argmax(dim=0), self.n_classes).permute(2, 0, 1).numpy()
-        
-    def __str__(self):
-        return self.__class__.__name__
-
-
-
-# class UNet(nn.Module):
-#     def __init__(self, n_channels, n_classes, mean, std):
-#         super().__init__()
-#         self.n_channels = n_channels
-#         self.n_classes = n_classes
-
-#         self.norm = Norm(mean, std)
-#         self.inc = DoubleConv(n_channels, 64)
-#         self.down
-
-class UNet0(nn.Module):
-    def __init__(self, n_channels, n_classes, mean, std):
-        super().__init__()
-        self.n_channels = n_channels
-        self.n_classes = n_classes
-
-        self.norm = Norm(mean, std)
-        self.inc = DoubleConv(n_channels, 64)
-        self.down1 = Down(64, 128)
-        self.down2 = Down(128, 256)
-        self.down3 = Down(256, 512)
-        self.down4 = Down(512, 1024)
-        self.up4 = Up(1024, 512)
-        self.up3 = Up(512, 256)
-        self.up2 = Up(256, 128)
-        self.up1 = Up(128, 64)
-        self.outc = OutConv(64, n_classes)
-
-    def forward(self, x):
-        x = self.norm(x)
-        x1 = self.inc(x)
-        x2 = self.down1(x1)
-        x3 = self.down2(x2)
-        x4 = self.down3(x3)
-        x5 = self.down4(x4)
-        x = self.up4(x5, x4)
-        x = self.up3(x, x3)
-        x = self.up2(x, x2)
-        x = self.up1(x, x1)
-        logits = self.outc(x)
-        return logits
-    
-    def __str__(self):
-        return "U-Net0"
-
-
-
-class UNet1(UNet0):
-    """
-    One more Maxpooling layer -> 1 level deeper
-    """
-    def __init__(self, n_channels, n_classes, mean, std, **kwargs):
-        super().__init__(n_channels, n_classes, mean, std)
-        self.down5 = Down(1024, 2048)
-        self.up5 = Up(2048, 1024)
-
-    def forward(self, x):
-        x = self.norm(x)
-        x1 = self.inc(x)
-        x2 = self.down1(x1)
-        x3 = self.down2(x2)
-        x4 = self.down3(x3)
-        x5 = self.down4(x4)
-        x6 = self.down5(x5)
-        x = self.up5(x6, x5)
-        x = self.up4(x, x4)
-        x = self.up3(x, x3)
-        x = self.up2(x, x2)
-        x = self.up1(x, x1)
-        logits = self.outc(x)
-        return logits
-
-    def predict(self, image):
-        with torch.no_grad():
-            output = self.forward(image)[0,:,:,:]
-            output = torch.argmax(output, dim = 0)
-            return np.uint8(output.cpu().numpy())
-        #     if self.n_classes > 1:
-        #         probs = nn.functional.softmax(output, dim=0)
-        #     else:
-        #         probs = torch.sigmoid(output)[0]
-
-        #     tf = transforms.Compose([
-        #         transforms.ToPILImage(),
-        #         transforms.Resize((image.size()[1], image.size()[0])),
-        #         transforms.ToTensor()
-        #     ])
-
-        #     full_mask = tf(probs.cpu()).squeeze()
-
-        # if self.n_classes == 1:
-        #     return (full_mask > out_threshold).numpy()
-        # else:
-        #     print(*full_mask.size())
-        #     return nn.functional.one_hot(full_mask.argmax(dim=0), self.n_classes).permute(2, 0, 1).numpy()
-        
-    
-    def __str__(self):
-        return "U-Net1"
-
-class UNet2(UNet1):
-    def __init__(self, n_channels, n_classes, mean, std, **kwargs):
-        super().__init__(n_channels, n_classes, mean, std)
-        self.down6 = Down(2048, 4096)
-        self.up6 = Up(4096, 2048)
-
-    def forward(self, x):
-        x = self.norm(x)
-        x1 = self.inc(x)
-        x2 = self.down1(x1)
-        x3 = self.down2(x2)
-        x4 = self.down3(x3)
-        x5 = self.down4(x4)
-        x6 = self.down5(x5)
-        x7 = self.down6(x6)
-        x = self.up6(x7, x6)
-        x = self.up5(x, x5)
-        x = self.up4(x, x4)
-        x = self.up3(x, x3)
-        x = self.up2(x, x2)
-        x = self.up1(x, x1)
-        logits = self.outc(x)
-        return logits
-
-    def __str__(self):
-        return "U-Net2"
-    
 class Encoder(torch.nn.Module):
-    def __init__(self, n_channels, mean, std, depth, base_kernel = 64, **kwargs):
+    def __init__(self, n_channels, mean, std, depth, base_kernel = 64, conv_downsample = False, **kwargs):
         super().__init__()
         self.depth = depth
 
@@ -331,7 +176,7 @@ class Encoder(torch.nn.Module):
 
         encoder = [DoubleConv(n_channels, base_kernel)]
         for i in range(depth):
-            encoder.append(Down(base_kernel*(2**i), base_kernel*(2**(i+1))))
+            encoder.append(Down(base_kernel*(2**i), base_kernel*(2**(i+1)), conv_downsample=conv_downsample))
 
         self.encoder = nn.ModuleList(encoder)
 
@@ -365,25 +210,10 @@ class Decoder(torch.nn.Module):
 
         logits = self.out_conv(x)
         return logits
-    
-
-class UNet(Model):
-    def __init__(self, n_channels, n_classes, mean, std, depth, bilinear = False, base_kernel = 64, **kwargs):
-        super().__init__(n_channels, n_classes)
-        self.encoder = Encoder(n_channels, mean, std, depth, base_kernel)
-        self.decoder = Decoder(n_classes, depth, base_kernel, bilinear)
-
-    def forward(self, x):
-        skip_cons = self.encoder(x)
-        return {"segmentation": self.decoder(skip_cons)}
-    
 
 class Classifier(torch.nn.Module):
-    def __init__(self, depth, base_kernel = 64):
+    def __init__(self,n_classes, depth, base_kernel = 64, conv_downsample = False):
         super().__init__()
-        # self.conv = DoubleConv(base_kernel*2**depth, 64)
-        # self.flatten = torch.nn.Linear(64*33*26, 1000)
-        # self.decide = torch.nn.Linear(1000, 2)
         decoder = []
         for i in range(depth):
             inc = base_kernel*(2**(depth-i))
@@ -392,9 +222,9 @@ class Classifier(torch.nn.Module):
             decoder.append(DoubleConv(inc, outc))
 
         self.decoder = nn.ModuleList(decoder)
-        image_width = 1068//2**depth
-        image_height = 847//2**depth
-        self.linear_decide = nn.Linear(image_height*image_width*base_kernel, 2)
+        image_width = 1068//2**depth + int(conv_downsample) #If double strided convolution is used instead of maxpooling, then we have to add 1
+        image_height = 847//2**depth + int(conv_downsample)
+        self.linear_decide = nn.Linear(image_height*image_width*base_kernel, n_classes)
 
 
     def forward(self, x):
@@ -403,16 +233,79 @@ class Classifier(torch.nn.Module):
         x = torch.flatten(x, 1)
         x = self.linear_decide(x)
         return x
-        
+     
+#########################################################################
+#                                                                       #
+#                         Unet based models                             #
+#                                                                       #
+#########################################################################
 
+class Model(nn.Module):
+    def __init__(self, n_channels, n_classes, **kwargs):
+        super().__init__()
+        self.n_channels = n_channels
+        self.n_classes = n_classes
+
+    def predict(self, image:torch.Tensor, classification_threshold = 0.5, **kwargs) -> np.ndarray:
+        """
+        Input: image        - already prepeared torch tensor for model processing
+        
+        Output: dict    
+            segmentation:   One Hot encoded for easy multiclass dice calculation
+            classification: Int
+
+        """
+        
+        self.eval()
+        with torch.no_grad():
+            output = self.forward(image)
+
+        return_dict = dict()
+        seg_pred = output.get('segmentation')
+        cls_pred = output.get('classification')
+
+        if seg_pred is not None:
+            probs = nn.functional.softmax(seg_pred, dim=1)[0] # To get rid of batch dimension
+            #softmax perserves dimensions -> get rid of batch dimension
+            #argmax will leave the channel dimension -> index 0 to get rid of channels
+            #one hot adds dimension for each class including background
+            seg_pred = nn.functional.one_hot(torch.argmax(probs, dim = 0), self.n_classes)
+            seg_pred = seg_pred.permute(2, 0, 1)
+            return_dict.update({'segmentation': seg_pred})
+
+        if cls_pred is not None:
+            cls_pred = int(torch.nn.functional.softmax(cls_pred)[1] >= classification_threshold)
+        else:
+            assert seg_pred is not None, "At least one of the duo segmnetation and classification has to be not None"
+            cls_pred = int(torch.sum(probs[1:,...] >= classification_threshold) > 0)
+        return_dict.update({'classification': cls_pred})
+        return return_dict
+        
+    def __str__(self):
+        return self.__class__.__name__
+
+class UNet(Model):
+    def __init__(self, n_channels, n_classes, mean, std, depth, bilinear = False, conv_downsample = False, base_kernel = 64, **kwargs):
+        super().__init__(n_channels, n_classes)
+        self.encoder = Encoder(n_channels, mean, std, depth, base_kernel, conv_downsample)
+        self.decoder = Decoder(n_classes, depth, base_kernel, bilinear)
+        self.depth = depth
+
+    def forward(self, x, **kwargs):
+        skip_cons = self.encoder(x)
+        return {"segmentation": self.decoder(skip_cons)}
+    
+    def __str__(self):
+        return F"{super().__str__()} depth:{self.depth}"
+        
 class Classification_UNet(UNet):
-    def __init__(self, n_channels, n_classes, mean, std, depth, bilinear = False, base_kernel = 64, **kwargs):
-        super().__init__(n_channels, n_classes, mean, std, depth, bilinear, base_kernel, **kwargs)
+    def __init__(self, n_channels, n_classes, mean, std, depth, bilinear = False, base_kernel = 64, conv_downsample = False, **kwargs):
+        super().__init__(n_channels, n_classes, mean, std, depth, bilinear,conv_downsample, base_kernel,  **kwargs)
 
         
-        self.classifier = Classifier(depth, base_kernel)
+        self.classifier = Classifier(n_classes, depth, base_kernel, conv_downsample)
 
-    def forward(self, x):
+    def forward(self, x, **kwargs):
         skip_cons = self.encoder(x)
 
         ret = {"segmentation": self.decoder(skip_cons),
@@ -420,47 +313,31 @@ class Classification_UNet(UNet):
 
         return ret
     
-
-class UNet9(Model):
-    def __init__(self, n_channels, n_classes, mean, std, depth, bilinear = False, base_kernel = 64, **kwargs):
+class Classificator(Model):
+    def __init__(self, n_channels, n_classes, mean, std, depth, base_kernel = 64, conv_downsample = False, **kwargs):
         super().__init__(n_channels, n_classes)
-        self.depth = depth
-        self.norm = Norm(mean, std)
+        self.encoder = Encoder(n_channels, mean, std, depth, base_kernel, conv_downsample)
 
-        encoder = [DoubleConv(n_channels, base_kernel)]
-        for i in range(depth):
-            encoder.append(Down(base_kernel*(2**i), base_kernel*(2**(i+1))))
+        self.decide = Classifier(n_classes, depth, base_kernel, conv_downsample)
 
-        self.encoder = nn.ModuleList(encoder)
+    def forward(self, x, **kwargs):
+        skip_connections = self.encoder(x)
+        return {"classification":self.decide(skip_connections[-1])}
 
+class CoTrainer(Model):
+    def __init__(self, n_channels, n_classes, mean, std, depth, base_kernel = 64, **kwargs):
+        super().__init__(n_channels, n_classes, **kwargs)
+        self.unet1 = UNet(n_channels, n_classes, mean, std, depth, base_kernel = base_kernel)
+        self.unet2 = UNet(n_channels, n_classes, mean, std, depth, base_kernel = base_kernel)
 
-        decoder = []
-        factor = 2 if bilinear else 1
-        for i in range(depth):
-            inc = base_kernel*(2**(depth-i))//factor
-            outc = int(base_kernel*(2**(depth - i - 1))//factor)
-            
-            decoder.append(Up(inc, outc, bilinear))
-
-        self.decoder = nn.ModuleList(decoder)
-
-        self.out_conv = OutConv(base_kernel, n_classes)
-
-    def forward(self, x):
-        x = self.norm(x)
-        skip_cons = [x]
-        for layer in self.encoder:
-            skip_cons.append(layer(skip_cons[-1]))
-
-        x = skip_cons[-1]
-        for index, layer in enumerate(self.decoder):
-            x = layer(x, skip_cons[-2-index])
-
-        logits = self.out_conv(x)
-        return logits
-    
-    def __str__(self):
-        return F"{self.__class__.__name__}: d={self.depth}"
+    def forward(self, x,**kwargs):
+        x1 = self.unet1(x)
+        x2 = self.unet2(x)
+        if self.training:
+            return x1, x2
+        else:
+            return dict( segmentation = 
+                        (nn.functional.softmax(x1['segmentation'], dim = 1) + nn.functional.softmax(x2['segmentation'], dim = 1))/2)
 
 
 class UNetPP(nn.Module):
@@ -516,4 +393,21 @@ class UNetPP(nn.Module):
         return self.outConv(outputs[0][-1])
 
 
+class ScribleSegmentation(nn.Module):
+    def __init__(self, K=2000, lam=0.1, exponent = 2, sigma = 64):
+        super().__init__()
+        self.K = K
+        self.lam = lam
+        self.exponent = exponent
+        self.sigma = sigma
 
+    def forward(self, image, prediction):
+        image = torch.squeeze(image)
+        image = image.detach().cpu().numpy()
+        if np.max(image) <= 1:
+            image = image*255
+        prediction = prediction.detach().cpu().numpy()
+        prediction = segalg.get_segmentation(image, prediction, self.K, self.lam, self.exponent, self.sigma)
+        # a = torch.from_numpy(np.uint8(prediction)).to(torch.int64)
+    
+        return torch.nn.functional.one_hot(torch.from_numpy(np.uint8(prediction)).to(torch.int64)).permute(2,0,1).to(device = torch.device('cuda' if torch.cuda.is_available() else 'cpu'))

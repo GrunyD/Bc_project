@@ -15,7 +15,7 @@ from tqdm import tqdm
 from utils.data_loading import BasicDataset, CarvanaDataset
 from utils.dice_score import dice_loss
 # from bc_project.Bc_project.train_predict_eval.evaluate import evaluate
-from evaluate import evaluate, evaluate_model
+from bc_project.Bc_project.evaluate import evaluate, evaluate_model
 from unet.Unet_model import UNet
 
 # dir_img = Path('./data/kuntluka/zuby/dental_restorations/images_without_alpha/')

@@ -38,4 +38,38 @@ def dice_loss(input: Tensor, target: Tensor, multiclass: bool = False):
     fn = multiclass_dice_coeff if multiclass else dice_coeff
     return 1 - fn(input, target, reduce_batch_first=False)
 
+def IOU(input: Tensor, target, reduce_batch_first:bool = False):
+    # Average of Dice coefficient for all batches, or for a single mask
+    epsilon = 1e-7
+    assert input.size() == target.size()
+    if input.dim() == 2 and reduce_batch_first:
+        raise ValueError(f'Dice: asked to reduce batch but got tensor without batch dimension (shape {input.shape})')
+
+    if input.dim() == 2 or reduce_batch_first:
+        inter = torch.dot(input.reshape(-1), target.reshape(-1))
+        union = torch.sum(input) + torch.sum(target-input)
+        if union.item() == 0:
+            union = inter
+
+        return (inter + epsilon) / (union+ epsilon)
+    else:
+        # compute and average metric for each batch element
+        iou = 0
+        for i in range(input.shape[0]):
+            iou += IOU(input[i, ...], target[i, ...])
+        return iou / input.shape[0]
+
+def multiclass_IOU(input:Tensor, target: Tensor, reduce_batch_first:bool = False):
+    assert input.size() == target.size()
+    iou = 0
+    for channel in range(input.shape[1]):
+        iou += IOU(input[:, channel, ...], target[:, channel, ...], reduce_batch_first, epsilon)
+
+    return iou / input.shape[1]
+
+def IOU_loss(input:Tensor, target:Tensor, multiclass:bool = False):
+    assert input.size() == target.size()
+    fn = multiclass_IOU if multiclass else IOU
+    return 1 - fn(input, target, reduce_batch_first=False)
+
 

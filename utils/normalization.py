@@ -6,8 +6,8 @@ on the source the padding was different for each image.
 
 Several type of paddings but all of them are in corners -> we use floodfill by cv2 to filter them out
 """
-#0.4593777512924429
-#std0.05667971439080055
+#mean0.4593777512924429
+#var0.05667971439080055
 from tqdm import tqdm
 import cv2
 import os
