@@ -27,6 +27,10 @@ Is not used during training. It is meant for computing mean and std before train
 ### Data
 For anyone following this work and trying to compare the results. These were indexes of files used in cross validation. During Stage 2 (described in my work) I used validation_set1 to evaluate. The rest was used for cross validation.
 
+Yolo labels is zip file containing around 1000 text files for yolo training as it requires. 
+
+complete annotation is notebook created to put annotations toghether. In this task we used CVAT to annotate images. However there were several stages of datasets. Thus in cvat they are 
+
 ### Yolo handling
 Only contains file which evaluates yolo trained model. For anyone to come to have easier job.
 

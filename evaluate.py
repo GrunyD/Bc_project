@@ -32,8 +32,8 @@ def evaluate(net, dataloader, device):
         mask_true = mask_true.to(device=device, dtype=torch.long)
         mask_true = F.one_hot(mask_true, net.n_classes).permute(0, 3, 1, 2).float()
         true_class = true_class.to(device, dtype = torch.long)
-        if true_class ==-1:
-            continue
+        # if true_class ==-1:
+        #     continue
 
         with torch.no_grad():
             # predict the mask
@@ -100,7 +100,7 @@ if __name__ == "__main__":
     net.load_state_dict(torch.load('/datagrid/personal/grundda/models/genial-aardvark-367.pth', map_location=device))
     net.to(device = device)
 
-    dataset = data_loading.BaseDataset('/home.stud/grundda2/.local/data/val_images', '/home.stud/grundda2/.local/data/masks', enable_augment=False)
+    dataset = data_loading.BaseDataset('/home.stud/grundda2/.local/data/test_images', '/home.stud/grundda2/.local/data/masks', enable_augment=False)
     loader = torch.utils.data.DataLoader(dataset)
     print(evaluate(net, loader, device))
 

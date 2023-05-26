@@ -49,6 +49,7 @@ STD = 0.23807501840974526   #Standard deviation of training Dataset
 DEPTH = 4       # How many downsampling layers are used
 BASE_KERNEL = 64
 CONV_DOWNSAMPLE = False # If True, net uses double strided convolution to downsample instead of maxpool
+BILINEAR = True
 
 #DATASET ARGS
 ENABLE_AUGMENT = False #If True, augmentation is turned on - edit in utils/data_loading.py -> BaseDataset
@@ -57,7 +58,7 @@ FOURIER_TRANSFORM = False #If True, augmentation via adjusting magnitude of four
 CONSISTENCY = False# If True, consistency loss function is applied and dataloader gets perturbated images
                     # See utils utils/data_loading.py -> ConsistencyDataset
 PERTURBATED_PROBABILITY = 0.8 # Goes with consistency training
-BATCH_SIZE = 1
+BATCH_SIZE = 3
 SCALE = 1    #Scaling images to fit to memory of GPU
 
 #LOSS
@@ -79,7 +80,7 @@ PATIENCE = 6
 def define():
 #################################################
 #   Defining net 
-    net = MODEL_TYPE(n_channels=N_CHANNELS, n_classes=N_CLASSES,mean = MEAN, std = STD, depth = DEPTH, conv_downsample = CONV_DOWNSAMPLE)
+    net = MODEL_TYPE(n_channels=N_CHANNELS, n_classes=N_CLASSES,mean = MEAN, std = STD, depth = DEPTH, conv_downsample = CONV_DOWNSAMPLE, bilinear=BILINEAR)
     net.to(device= DEVICE)
     if PRETRAINED_MODEL is not None:
         if isinstance(PRETRAINED_MODEL, (tuple, list)):
@@ -284,39 +285,37 @@ def train(net, train_loader,  val_loader, experiment):
                     
                 #############################
                 # Evaluation round
-                division_step = (n_train)
-                if division_step > 0:
-                    if global_step % division_step == 0:
-                        with torch.no_grad():
+                
+        with torch.no_grad():
 
 
-                            val_score = evaluate(net, val_loader, DEVICE)
-                            print(F"DSC: {val_score[0]}\nDSC true positive: {val_score[1]}")
+            val_score = evaluate(net, val_loader, DEVICE)
+            print(F"DSC: {val_score[0]}\nDSC true positive: {val_score[1]}")
 
-                            # if prediction.get('segmentation') is not None:
-                            experiment.log({
-                                        # 'learning rate': optimizer.param_groups[0]['lr'],
-                                        'DSC': val_score[0],
-                                        'DSC true positive': val_score[1],
-                                        'epoch': epoch,
-                                    })
-                            train_loader.dataset.enable_augment = False
-                            train_score = evaluate(net, train_loader, DEVICE)
-                            train_loader.dataset.enable_augment = True
-                            print(F"train DSC: {train_score[0]}\ntrain DSC true positive: {train_score[1]}")
-                            experiment.log({
-                                "train DSC": train_score[0],
-                                "train DSC true positive": train_score[1],
-                                'epoch':epoch
-                            })
-                            if val_score[1] > best_dice:
-                                best_dice = val_score[1]
-                                best_dict = copy.deepcopy(net.state_dict())
+            # if prediction.get('segmentation') is not None:
+            experiment.log({
+                        # 'learning rate': optimizer.param_groups[0]['lr'],
+                        'DSC': val_score[0],
+                        'DSC true positive': val_score[1],
+                        'epoch': epoch,
+                    })
+            train_loader.dataset.enable_augment = False
+            train_score = evaluate(net, train_loader, DEVICE)
+            train_loader.dataset.enable_augment = True
+            print(F"train DSC: {train_score[0]}\ntrain DSC true positive: {train_score[1]}")
+            experiment.log({
+                "train DSC": train_score[0],
+                "train DSC true positive": train_score[1],
+                'epoch':epoch
+            })
+            if val_score[1] > best_dice:
+                best_dice = val_score[1]
+                best_dict = copy.deepcopy(net.state_dict())
                                 
                             # if prediction.get('classification') is not None:
                             #     experiment.log({'Classification': val_score[2],'epoch':epoch})
             
-            scheduler.step()
+        scheduler.step()
             
 
         

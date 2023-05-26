@@ -38,6 +38,8 @@ def to_image(mask):
     return mask2
 
 def _TP_FP_FN(true_mask, prediction):
+    true_mask = true_mask.to(torch.uint8)
+    prediction = prediction.to(torch.uint8)
     TP = true_mask * prediction
     FP = prediction - TP
     FN = true_mask - TP
@@ -59,12 +61,13 @@ def comparison_picture(true_mask, prediction):
     return zer*200
 
 def dice_score(true_mask, prediction):
-    assert true_mask.size()[-2:] == prediction.size()[-2:], F"{true_mask.size()}, {prediction.size()[-2:]}"
-    epsilon = 1e-6
-    true_mask = F.one_hot(torch.squeeze(true_mask)).permute(2, 0, 1)
-    inter = torch.sum(true_mask[1:,...]*prediction[1:,...])
-    sets_sum = torch.sum(prediction[1:,...]) + torch.sum(true_mask[1:,...])
-    return (2 * inter + epsilon) / (sets_sum + epsilon)
+    # assert true_mask.size()[-2:] == prediction.size()[-2:], F"{true_mask.size()}, {prediction.size()[-2:]}"
+    # epsilon = 1e-6
+    # true_mask = F.one_hot(torch.squeeze(true_mask)).permute(2, 0, 1)
+    # inter = torch.sum(true_mask[1:,...]*prediction[1:,...])
+    # sets_sum = torch.sum(prediction[1:,...]) + torch.sum(true_mask[1:,...])
+    # return (2 * inter + epsilon) / (sets_sum + epsilon)
+    return (2*torch.sum(true_mask*prediction) + 1e-7)/(torch.sum(true_mask) + torch.sum(prediction) + 1e-7)
 
 def IOU(true_mask, prediction):
     assert true_mask.size()[-2:] == prediction.size()[-2:]
@@ -85,7 +88,6 @@ def image_with_segmentation(image, mask, color):
     # print(mask.device)
     image =image.to(torch.device('cpu'))
     mask = mask.to(torch.device('cpu'))
-
     return torchvision.utils.draw_segmentation_masks(image, mask > 0, alpha = ALPHA, colors = color)
 
 # def image_with_predicted_mask(image, predicted_mask):
@@ -186,7 +188,7 @@ def evaluation_picture(image, true_mask, prediction, kunt_prediction, path_to_ex
         cols = [grid_padding + padding, padding + 2*grid_padding + PICTURE_WIDTH,padding + 3*grid_padding + 2*PICTURE_WIDTH]
 
     else:
-        text_list = ["X-ray image (input)", "Dentist student annotation",
+        text_list = ["X-ray image (input)", "Pseudolabels",
                     "Ground truth annotation","Evaluation"]
         cols = [grid_padding + padding, padding + 2*grid_padding + PICTURE_WIDTH]
 
@@ -261,7 +263,7 @@ def morph_grid_search(model, path_to_images, path_to_masks):
 
 
     grid = grid/len(listdir(path_to_images))
-    print(grid)
+    # print(grid)
 
 def get_detected_segmentations(coco, name, prediction):
     if isinstance(prediction, torch.Tensor):
@@ -311,11 +313,15 @@ def positives_negatives(prediction:int, true_class:int, pos_neg:dict):
     """
     Gets dict with True positive, True negative, False positive and False negative values and updates it
     """
+    # print(prediction)
+    # print(true_class)
+    # print(prediction == true_class)
     key = F"{'T' if prediction == true_class else 'F'}{'P' if prediction else 'N'}"
+    # print(key)
     pos_neg[key] += 1
     return pos_neg
     
-def eval_model(net, images, masks, segmentation = True, threshold = 0.5, eval_pictures = False):
+def eval_model(net, images, masks, segmentation = True, threshold = 0.9, eval_pictures = False):
     """
     inputs:
         net:            torch.Module trained model - should output dict with 'segmentation' and posibly 'classification' keys
@@ -387,20 +393,26 @@ def eval_model(net, images, masks, segmentation = True, threshold = 0.5, eval_pi
             image = batch['image']
             mask = batch['mask']
             clas = batch['class']
+            # print(clas)
             prob = get_seg_from_annot(net, batch['name'][0])
-            predicted_mask = prob['segmentation']
+            predicted_mask = prob['segmentation'].to(torch.int)
 
         # if prob.get('segmentation') is not None:
+        predicted_class = clas if batch['name'][0] != '632' else 0
 
-        inter = mask*predicted_mask
-        false_positive_sum = torch.sum(predicted_mask - inter > 0)
-        false_negative_sum = torch.sum(mask - inter > 0)
+        if predicted_class == 0:
+            predicted_mask = torch.zeros((847, 1068)).to(device = device)
+        
+
+        inter = (mask*predicted_mask).to(torch.int)
+        false_positive_sum = torch.sum((predicted_mask - inter) > 0)
+        false_negative_sum = torch.sum((mask - inter) > 0)
         true_positive_sum  = torch.sum(inter)
 
         dice = (2*true_positive_sum + 1e-8)/(2*true_positive_sum + false_negative_sum + false_positive_sum + 1e-8)
         iou = (true_positive_sum+ 1e-8)/(true_positive_sum + false_positive_sum + false_negative_sum + 1e-8)
         
-        dice_histogram.append(dice)
+        
         total_dice += dice
         total_IOU += iou
 
@@ -409,6 +421,7 @@ def eval_model(net, images, masks, segmentation = True, threshold = 0.5, eval_pi
         all_FN_pixels += false_negative_sum
 
         if clas:
+            dice_histogram.append(dice.item())
             true_positive_dice += dice
             true_positive_IOU += iou
             true_positive_count += 1
@@ -418,19 +431,20 @@ def eval_model(net, images, masks, segmentation = True, threshold = 0.5, eval_pi
             image = torch.broadcast_to(image[0], (3, image.size(2), image.size(3)))
             mask = (mask).to(torch.device('cpu'))
             predicted_mask = (predicted_mask).to(torch.device('cpu'))
-            evaluation_picture(image, mask, predicted_mask[1:], None, "/home.stud/grundda2/bc_project/Bc_project/evaluation/", file_name=F"{batch['name'][0]}.png",dice=dice)
+            evaluation_picture(image, mask, predicted_mask, None, "/home.stud/grundda2/bc_project/Bc_project/evaluationpseudo/", file_name=F"{batch['name'][0]}.png",dice=dice)
     
-    class_prob = prob.get('classification')
-    if  class_prob is not None:
-        class_prob = torch.squeeze(F.softmax(class_prob,dim=1).detach())
-        predicted_class = int(class_prob[1] > threshold)
-    else:
-        # print(predicted_mask.size())
-        
-        predicted_class = int(torch.sum(predicted_mask[1] > threshold)>0)
+        # class_prob = prob.get('classification')
+        # if  class_prob is not None:
+        #     class_prob = torch.squeeze(F.softmax(class_prob,dim=1).detach())
+        #     predicted_class = int(class_prob[1] > threshold)
+        # else:
+        #     # print(predicted_mask.size())
+            
+        #     predicted_class = int(torch.sum(predicted_mask > threshold)>0)
 
-    # predicted_class = prediction.get('classification')
-    pos_neg = positives_negatives(predicted_class, clas, pos_neg)
+        # # predicted_class = prediction.get('classification')
+        # pos_neg = positives_negatives(predicted_class, clas, pos_neg)
+        # # print("jou")
 
             # pbar.update(1)
     eps = 1e-8
@@ -446,7 +460,7 @@ def eval_model(net, images, masks, segmentation = True, threshold = 0.5, eval_pi
             true_positive_dice = true_positive_dice/true_positive_count,
 
             total_IOU = total_IOU/len(val_set),
-            overall_IOU = 2*all_TP_pixels/(all_TP_pixels*2 + all_FN_pixels + all_FP_pixels),
+            overall_IOU = all_TP_pixels/(all_TP_pixels + all_FN_pixels + all_FP_pixels),
             true_positive_IOU = true_positive_IOU/true_positive_count,
 
             pixel_precision = all_TP_pixels/(all_TP_pixels + all_FP_pixels),
@@ -549,24 +563,29 @@ def mai_graphs():
     # model_name = Path("holographic-federation-408.pth")Classification Unet
     # model_name = Path('hokey-trooper-410.pth')
     path_to_data = Path('/home.stud/grundda2/.local/data')
-    images_dir = path.join(path_to_data, 'val_images')
+    images_dir = path.join(path_to_data, 'test_images')
     masks_dir = path.join(path_to_data, 'masks')
     
     
     # for model, model_name in [(Unet_model.Classificator,Path('hokey-trooper-410.pth')),(Unet_model.Classification_UNet,Path("holographic-federation-408.pth")),(Unet_model.UNet,Path("faithful-night-435.pth"))]:
-    # model = Unet_model.UNet
-    # model_name = Path("faithful-night-435.pth")
-    # net = model(n_channels = 1, n_classes=2,mean = 0.4593777512924429, std = 0.23807501840974526, depth = 5)
-    # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    # net.to(device)
-    # model_path = path.join('/datagrid/personal/grundda/models', model_name)
-    # net.load_state_dict(torch.load(model_path, map_location = device))
+   
+   
+   
+    model = Unet_model.UNet
+    # model_name = Path("worldly-gorge-499.pth") #Pseudolabels
+    model_name = Path("misty-water-497.pth") #Consistency
+    # model_name = Path('rose-violet-489.pth') #Normal
+    net = model(n_channels = 1, n_classes=2,mean = 0.4593777512924429, std = 0.23807501840974526, depth = 5)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    net.to(device)
+    model_path = path.join('/datagrid/personal/grundda/models', model_name)
+    net.load_state_dict(torch.load(model_path, map_location = device))
 
-    net = COCO('/home.stud/grundda2/bc_project/Bc_project/evaluation/adelannotation.json')
+    # net = COCO('/home.stud/grundda2/bc_project/Bc_project/Hanievaluation/Haniannotation.json')
     
 
         
-    result = eval_model(net, images_dir, masks_dir, True, eval_pictures=True)
+    result = eval_model(net, images_dir, masks_dir, True, eval_pictures=False)
     print(result)
     # result=eval_model(net, images_dir, masks_dir)
     # get_PR_result(nets[2], images_dir, masks_dir)
@@ -594,11 +613,121 @@ def mai_graphs():
 #         images_names = list(map(int, f.readlines()))
 #     name = "Kunt"
 #     evaluate_pictures_without_net(name, path_to_data, images_names)
+def my_grid2(image, true_mask, predictions,grid_padding, padding):
+    col_padding = padding
+    colors = ['cyan', 'yellow', 'green','pink']
+    grid_list = [image,]
+    for index,pred in enumerate(predictions):
+        grid_list.append(image_with_segmentation(image, pred, colors[index]))
+    grid_list.append(image_with_segmentation(image, true_mask, "red"))
+    for pred in predictions:
+        grid_list.append(comparison_picture(true_mask, pred))
+
+    cols_num = len(predictions) + 1
+    grid_size = grid_shape(grid_padding, cols_num, 2)
+
+    grid =  torchvision.utils.make_grid(grid_list, padding=grid_padding, pad_value=236, nrow=cols_num).permute([1,2,0])
+    
+    cols = 255*torch.ones((grid_size[0] + LOWER_ROW_PADDING + UPPER_ROW_PADDING, col_padding, 3), dtype=torch.uint8)
+    row_upper = 255*torch.ones((UPPER_ROW_PADDING, grid_size[1], 3), dtype=torch.uint8)
+    row_lower = 255*torch.ones((LOWER_ROW_PADDING, grid_size[1], 3), dtype=torch.uint8)
+    
+    grid = torch.vstack((row_upper, grid, row_lower))
+    grid = torch.hstack((cols, grid, cols))
+    return grid.permute([2,0,1])
+
+def evaluation_picture2(image, true_mask, predictions, names, path_to_export, file_name=""):
+    print(names)
+    grid_padding = 30
+    padding = 50
+    black = (0,0,0)
+    image = torchvision.transforms.ToPILImage()(my_grid2(image, true_mask, predictions, grid_padding, padding))
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.truetype("LEMONMILK-Light.otf", 60)
+
+    # LEGEND
+    font_size = 60
+    font = ImageFont.truetype("LEMONMILK-Light.otf", font_size)
+
+    # dice = dice_score(true_mask, F.one_hot(torch.squeeze(prediction)).permute(2,0,1))
+    rows = [UPPER_ROW_PADDING-font_size-10, UPPER_ROW_PADDING + 3*grid_padding + 2*PICTURE_HEIGHT]
+    
+    text_list = ["X-ray image",]
+    for name in names:
+        text_list.append(name)
+    text_list.append("Ground truth")
+    for name in names:
+        text_list.append("Evaluation")
+    dice = [dice_score(true_mask, prediction) for prediction in predictions]
+    cols = [index*PICTURE_WIDTH + (index+1)*grid_padding + padding for index in range(len(predictions)+1)]
+
+    print(names)
+
+    print(text_list)
+    for indexr, row in enumerate(rows):
+        for indexc , col in enumerate(cols):
+            draw.text((col, row), text_list[indexr*len(cols) + indexc], black, font = font)
+
+    draw.text((cols[0], rows[0] - 90), F"File name: {file_name}", (0,0,0), font = font)
+    for index in range(len(predictions)):
+        draw.text((cols[index+1], rows[0] - 90), F"Dice: {dice[index]:.3f}", (0,0,0), font = font)
+
+    radius = 2
+    rec_width = 40
+    gap = 80
+    y = rows[1] + gap
+    x = cols[1] + gap
+    draw.rounded_rectangle((cols[1], y, cols[1]+rec_width, y + rec_width), radius = radius, fill = (0, 255, 0))
+    draw.text((x, y), "True positive", black, font = font)
+    y += gap
+    draw.rounded_rectangle((cols[1], y, cols[1]+rec_width, y + rec_width), radius = radius, fill = (255, 0, 0))
+    draw.text((x, y), "False positive", black, font = font)
+    y += gap
+    draw.rounded_rectangle((cols[1], y, cols[1]+rec_width, y + rec_width), radius = radius, fill = (0, 0, 255))
+    draw.text((x, y), "False negative", black, font = font)
+
+    image.save(path.join(path_to_export,file_name))
+
+def get_image(image_path, file_name):
+    image = torchvision.io.read_image(path.join(image_path, file_name), torchvision.io.ImageReadMode.RGB)
+    return image
+
+def get_mask(image_path, file_name):
+    image = torchvision.io.read_image(path.join(image_path, file_name))
+    return image>0
+
+def get_eval_pictures(images, masks, paths, names, export_path):
+    for image_name in listdir(images):
+        image = get_image(images, image_name)
+        mask = get_mask(masks, image_name)
+        predictions = []
+        prediction_names = []
+        for index, p in enumerate(paths):
+            if path.isfile(path.join(p, image_name)):
+                predictions.append(get_mask(p, image_name))
+                prediction_names.append(names[index])
+            else:
+                print(path.join(p, image_name))
+
+        
+
+        evaluation_picture2(image, mask, predictions, prediction_names, export_path, image_name)
+
+        
+
+        
+
+        
 
 
 if __name__ == "__main__":
     # eval_model()
-    mai_graphs()
+    # mai_graphs()
+    images = "/home.stud/grundda2/.local/data/images"
+    masks = "/home.stud/grundda2/.local/data/masks"
+    paths = ["/home.stud/grundda2/bc_project/Bc_project/evaluationmodel/", "/home.stud/grundda2/bc_project/Bc_project/adelevaluation","/home.stud/grundda2/bc_project/Bc_project/Hanievaluation"]
+    names = ["Model prediction", "Student A", "Student B"]
+    get_eval_pictures(images, masks, paths, names, "/home.stud/grundda2/bc_project/Bc_project/eval3")
     # main()
     # with open("result.pkl", "rb") as f:
     #     result = pickle.load(f)

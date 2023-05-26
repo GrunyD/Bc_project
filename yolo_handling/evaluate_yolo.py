@@ -25,12 +25,12 @@ IMAGE_CLASS_INFO = False
 EVALUATION_IMAGES = False
 
 
-PATH_TO_IMAGES = '/home.stud/grundda2/.local/data/val_images'
+PATH_TO_IMAGES = '/home.stud/grundda2/.local/data/test_images'
 PATH_TO_MASKS = '/home.stud/grundda2/.local/data/masks'
 PATH_TO_TEXT_LABELS = "/home.stud/grundda2/bc_project/darknet/data/dental_labels"
 COMPARISON_IMAGES = False
 
-CONFIDENCE_THRESHOLD = 0.78
+CONFIDENCE_THRESHOLD = 0.6
 CONFIDENCE_COLORS = [(0, 255, 0), (200, 255, 0), (255, 255, 0), (255, 200, 0), (255, 0, 0)]
 
 DARKNET = '/home.stud/grundda2/bc_project/darknet/'
@@ -178,16 +178,19 @@ def eval_model(net, confidence_threshold = None):
     classification_rate = classification_score/count
     print(F"Correctly classified: {classification_rate}")
 
-    precision = pos_neg['True_positive']/(pos_neg['True_positive'] + pos_neg['False_positive'] + 1e-7)
+    precision = (pos_neg['True_positive'] + 1e-7)/(pos_neg['True_positive'] + pos_neg['False_positive'] + 1e-7)
     print(F"Precision: {precision}")
 
-    recall = pos_neg['True_positive']/(pos_neg['True_positive'] + pos_neg['False_negative'] + 1e-7)
+    recall = (pos_neg['True_positive'] + 1e-7)/(pos_neg['True_positive'] + pos_neg['False_negative'] + 1e-7)
     print(F"Recall: {recall}")
 
     detection_boxes = np.array(count_found_centers)
     print("Found centers: ", np.sum(detection_boxes,axis=0))
 
-    return classification_rate, precision, recall
+    specificity = (pos_neg['True_negative'] + 1e-7)/(pos_neg['True_negative'] + pos_neg['False_positive'] + 1e-7)
+    print(F"Specificity: {specificity}")
+
+    return classification_rate, precision, recall, specificity
 
     
 def draw_bounding_boxes(image_path:str, boxes:list, confidences:list, segmask_path:str = None, comparison = False):
@@ -242,7 +245,7 @@ def eval_trained_weights(trained_weights:list = None):
     number_of_weights = len(trained_weights)
     result = {}
     # thresholds = [i/100 for i in range(50, 96, 2)]
-    thresholds = [0.3,]
+    thresholds = [0.56,]
     with tqdm(total = number_of_weights, unit='model') as pbar:
         for weights in trained_weights:
             net = cv.dnn.readNet(os.path.join(WEIGHTS,weights), CFG)
@@ -252,9 +255,9 @@ def eval_trained_weights(trained_weights:list = None):
             with tqdm(total = len(thresholds), unit='Confidence threshold', desc= desc) as pbar2:
                 for confidence_threshold in thresholds:
                     pbar2.update(1)
-                    classification_rate, precision, recall = eval_model(net, confidence_threshold)
+                    classification_rate, precision, recall, specificity = eval_model(net, confidence_threshold)
                     
-                    result[weights].append([confidence_threshold, classification_rate, precision, recall])
+                    result[weights].append([confidence_threshold, classification_rate, precision, recall, specificity])
     return result
 
 def precision_recall_curve(precision_recall_dict):
@@ -335,6 +338,7 @@ def rename_keys(d:dict):
 
 def main_eval(trained_weights = None):
     result = eval_trained_weights(trained_weights)
+    print(result)
     # with open('precision4.pkl', 'wb') as f:
     #     pickle.dump(result, f)
     
@@ -359,7 +363,7 @@ def main_eval(trained_weights = None):
 
 
 if __name__ == "__main__":
-    main_eval(['yolov3-voc_20000.weights',])# 'yolov3-voc_10000.weights',
+    main_eval(['yolov3-voc_10000.weights',])# 'yolov3-voc_10000.weights',
                #'yolov3-voc_30000.weights','yolov3-voc_40000.weights'])
     # result = {}
     # thresholds = [i/100 for i in range(50, 96, 2)]
